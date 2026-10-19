@@ -207,11 +207,12 @@ class V2Workbench(Workbench):
                        'edit': edit, 'incoming': str(folder / 'input.blend') if external else None,
                        'material_ids': material_ids,
                        'composition': source.get('composition', [])}
+                command = [self.adapter_config['blender'], '--background', '--factory-startup',
+                           '--disable-autoexec', '--python-exit-code', '1', '--python',
+                           str(REPO / 'scripts' / 'blender_revision.py'), '--', str(folder / 'job.json')]
+                job['command'] = command
                 write(folder / 'job.json', job)
-                metrics = process([self.adapter_config['blender'], '--background', '--factory-startup',
-                                   '--disable-autoexec', '--python-exit-code', '1', '--python',
-                                   str(REPO / 'scripts' / 'blender_revision.py'), '--',
-                                   str(folder / 'job.json')], folder / 'blender.log',
+                metrics = process(command, folder / 'blender.log',
                                   dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8'), REPO)
                 checks = read(pending / 'checks.json')
                 if checks.get('success') is not True or checks.get('mode') != mode:
@@ -582,10 +583,14 @@ class V2Workbench(Workbench):
             write(input_manifest, {'files': pack['files'], 'production_plan_id': production_id,
                                    'reference_pack_id': pack_id})
             job_file = folder / 'job.json'
+            command = [self.adapter_config['blender'], '--background', '--factory-startup',
+                       '--disable-autoexec', '--python-exit-code', '1', '--python',
+                       str(REPO / 'scripts' / 'blender_authoring.py'), '--', str(job_file)]
             write(job_file, {'script': str(action), 'output': str(folder / 'outputs.pending'),
                              'part_id': part_id, 'intent': recipe['intent'],
                              'face_limit': scope['face_limits'][part_id],
-                             'recipe': {k: copy.deepcopy(v) for k, v in recipe.items() if k != 'script'}})
+                             'recipe': {k: copy.deepcopy(v) for k, v in recipe.items() if k != 'script'},
+                             'command': command})
             fixed = {'stage': 'geometry', 'engine': 'blender_authoring', 'project_id': project_id,
                      'production_plan_id': production_id, 'production_hash': production['content_hash'],
                      'reference_pack_id': pack_id, 'reference_pack_hash': pack['content_hash'],

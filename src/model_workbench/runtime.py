@@ -132,10 +132,12 @@ def execute(workbench, project_id, plan_id, config):
                 job = {'stage': fixed['stage'], 'parts': parts, 'composition': fixed['composition'],
                        'source': str(workbench.verify_file(project_id, blend)) if blend else None,
                        'materials': fixed['materials'], 'edit': fixed['edit'], 'output': str(artifact_folder)}
+                command = [config['blender'], '--background', '--factory-startup', '--disable-autoexec',
+                           '--python-exit-code', '1', '--python', str(REPO / 'scripts/blender_workbench.py'),
+                           '--', str(folder / 'job.json')]
+                job['command'] = command
                 write(folder / 'job.json', job)
-                metrics = process([config['blender'], '--background', '--factory-startup', '--disable-autoexec',
-                                   '--python-exit-code', '1', '--python', str(REPO / 'scripts/blender_workbench.py'),
-                                   '--', str(folder / 'job.json')], folder / 'blender.log', env, REPO)
+                metrics = process(command, folder / 'blender.log', env, REPO)
                 checks = read(artifact_folder / 'checks.json')
                 if checks.get('success') is not True:
                     raise WorkflowError('Blenderの検査結果が不合格です')
@@ -213,9 +215,7 @@ def execute_authoring(workbench, project_id, plan_id, config):
             if pending.exists() or (folder / 'outputs').exists():
                 raise WorkflowError('run出力が既に存在します。再実行しません')
             env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8')
-            metrics = process([config['blender'], '--background', '--factory-startup', '--disable-autoexec',
-                               '--python-exit-code', '1', '--python', str(adapter), '--',
-                               str(folder / 'job.json')], folder / 'blender.log', env, REPO)
+            metrics = process(read(folder / 'job.json')['command'], folder / 'blender.log', env, REPO)
             checks = read(pending / 'checks.json')
             if checks.get('success') is not True or checks.get('part_id') != fixed['part_id'] or checks['faces'] > fixed['face_limit']['max_faces']:
                 raise WorkflowError('Blender造形の構造検査が不合格です')

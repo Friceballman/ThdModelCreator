@@ -12,6 +12,7 @@ import runpy
 import sys
 
 import bpy
+import bmesh
 from mathutils import Vector
 
 
@@ -40,6 +41,10 @@ def main(job_file):
     vertices = 0
     all_world = []
     duplicate_vertices = 0
+    boundary_edges = 0
+    non_manifold_edges = 0
+    loose_edges = 0
+    degenerate_faces = 0
     for obj in objects:
         obj['mwb_part_id'] = job['part_id']
         obj['mwb_source_candidate_id'] = job.get('source_candidate_id', '')
@@ -57,6 +62,13 @@ def main(job_file):
         for polygon in mesh.polygons:
             if len(polygon.vertices) < 3 or any(i < 0 or i >= len(mesh.vertices) for i in polygon.vertices):
                 raise ValueError(f'Invalid polygon: {obj.name}')
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        boundary_edges += sum(edge.is_boundary for edge in bm.edges)
+        non_manifold_edges += sum(not edge.is_manifold for edge in bm.edges)
+        loose_edges += sum(edge.is_wire for edge in bm.edges)
+        degenerate_faces += sum(face.calc_area() <= 1e-12 for face in bm.faces)
+        bm.free()
         faces += len(mesh.polygons)
         vertices += len(mesh.vertices)
         all_world.extend(obj.matrix_world @ Vector(corner) for corner in obj.bound_box)
@@ -96,8 +108,12 @@ def main(job_file):
     bpy.ops.wm.save_as_mainfile(filepath=str(output / 'model.blend'))
     bpy.ops.wm.obj_export(filepath=str(output / 'model.obj'))
     checks = {'success': True, 'part_id': job['part_id'], 'vertices': vertices, 'faces': faces,
+              'blender_version': bpy.app.version_string,
               'target_faces': job['face_limit']['target_faces'],
               'max_faces': job['face_limit']['max_faces'], 'duplicate_vertices': duplicate_vertices,
+              'boundary_edges': boundary_edges, 'non_manifold_edges': non_manifold_edges,
+              'loose_edges': loose_edges, 'degenerate_faces': degenerate_faces,
+              'self_intersections': 'not_checked',
               'bbox_min': mins, 'bbox_max': maxs, 'unit': 'm', 'up_axis': 'Z', 'front_axis': '-Y',
               'visual_review': 'uncertain', 'visual_reason': 'Preview must be inspected by Codex'}
     save_json(output / 'checks.json', checks)

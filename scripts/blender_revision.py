@@ -170,6 +170,7 @@ def main(job_path):
     bpy.ops.wm.save_as_mainfile(filepath=str(output / 'model.blend'))
     bpy.ops.wm.obj_export(filepath=str(output / 'model.obj'))
     write(output / 'checks.json', {'success': True, 'mode': job['mode'],
+                                   'blender_version': bpy.app.version_string,
                                    'changed_part_ids': changed, 'before': before, 'after': after,
                                    'composition_updates': updates,
                                    'visual_review': 'uncertain',
