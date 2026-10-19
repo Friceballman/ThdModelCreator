@@ -1,0 +1,23 @@
+{
+  "name": "single-image-triposr-blender-probe",
+  "purpose": "公式椅子画像を1回生成し、既存OBJの対照部品と組み立て、対象だけを10%拡大する接続試験。キャラクター品質は判定しない。",
+  "chunk_size": 1024,
+  "mc_resolution": 128,
+  "parts": [
+    {
+      "id": "probe_part",
+      "image": "C:/AI_test/TripoSR/examples/chair.png",
+      "location": [0, 0, 0],
+      "rotation_degrees": [0, 0, 0],
+      "scale": [1, 1, 1]
+    },
+    {
+      "id": "control_part",
+      "mesh": "C:/AI_test/TripoSR/output/chair-rtx3050ti/0/mesh.obj",
+      "location": [0.85, 0, 0],
+      "rotation_degrees": [0, 0, 0],
+      "scale": [0.5, 0.5, 0.5]
+    }
+  ],
+  "edit": {"part_id": "probe_part", "scale_factor": 1.1}
+}
