@@ -1,0 +1,32 @@
+{
+  "source_commit": "a8bc2d54ff0ac92e78ff71431b1023eda42bf482",
+  "source_sha256": "8e761e6624b8f54536409135d1636da63b32486a90d4897f84e121d144f6fb4c",
+  "operation": "Keep body group only, remove unused vertices, (x,y,z)->(-x,z,y), front=-Y, center XY, feet Z=0, height=1.7m",
+  "scale_factor": 0.10204755840381696,
+  "original_axis_offset": [
+    0.0,
+    1.0996499061584473,
+    -8.16759967803955
+  ],
+  "height_m": 1.7,
+  "height_is_design_assumption": true,
+  "vertices": 13380,
+  "faces": 13378,
+  "uv": "copied from upstream, appearance unreviewed",
+  "rigged": false,
+  "textures": false,
+  "ue_verified": false,
+  "obj_reloaded": true,
+  "blend_reloaded": true,
+  "adopted": false,
+  "files": [
+    {
+      "file": "body-base.blend",
+      "sha256": "dcc0edb7dc402e4b2cbae041c4dbc10c3766da6a98fa02b80aa727a62dfee76b"
+    },
+    {
+      "file": "body-base.obj",
+      "sha256": "a69fb817ea6570b985e77cd20d73533d6ce9de210e0566b858d290730144e726"
+    }
+  ]
+}

@@ -16,3 +16,8 @@ __pycache__/
 *.log
 *.tmp
 .cache/
+
+# Local production cases and experiment results
+/projects/
+/experiments/*
+!/experiments/config.example.json

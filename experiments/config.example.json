@@ -1,0 +1,7 @@
+{
+  "triposr_root": "C:/AI_test/TripoSR",
+  "triposr_python": "C:/AI_test/TripoSR/.venv/Scripts/python.exe",
+  "blender": "C:/Program Files/Blender Foundation/Blender 5.2/blender.exe",
+  "hf_home": "C:/AI_test/TripoSR/.local/huggingface",
+  "u2net_home": "C:/AI_test/TripoSR/.local/u2net"
+}
