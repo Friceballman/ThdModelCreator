@@ -6,7 +6,7 @@
 
 ## 1. 対象と完了条件
 
-対象は単一ユーザーのWindowsローカル制作。二次元資料を元に、CodexがBlender 5.2系の操作スクリプトを作成・実行して部品形状を制作し、仮組み、材質、静止全身候補、名前付きsource出力まで扱う。Blenderでの直接造形を試験経路とし、任意のキャラクターの品質は保証しない。TripoSRは過去案件の再現と、制作計画に明記した比較試験だけに利用できる。
+対象は単一ユーザーのWindowsローカル制作。二次元資料を元に、CodexがBlender 5.2系の操作スクリプトを作成・実行して部品形状を制作し、仮組み、材質、静止全身候補、名前付きsource出力まで扱う。Blenderを唯一の3D実行先とし、任意のキャラクターの品質は保証しない。旧案件の記録は読めるが、旧式の造形計画は再実行しない。
 
 本版の「完成候補」は、部品の形状、配置、材質、4方向の確認画像、検査と由来を保存した静止モデルを指す。リグ、関節変形、UE上の表示・動作、UV・ベイク、精密な顔や指は完成条件に含めない。必要なら別工程として計画し、未検証をmanifestへ表示する。
 
@@ -16,7 +16,7 @@
 
 ユーザーは制作計画で、目的・用途、保持／変更／改善条件、対象部品、許す制作方法と修正範囲、試行上限、造形の面数目標、材質の扱い、source出力を確認する。造形用資料パックでは、部品別の資料画像・図面、寸法・接続、推定を確認する。完成候補では、全身と任意の途中工程IDを見て修正対象・選択・保留・正式採用・出力を指示する。
 
-範囲外の部品追加、元資料の変更、TripoSRへの切替、確認済み資料パックの差替え、試行上限超過、利用条件不明の資産採用は自動実行しない。明示されたユーザーの修正指示が具体的な計画を特定できる場合は、その発言を承認根拠として新計画を記録し、同じ確認を繰り返さない。対象や範囲が曖昧な場合だけ確認する。沈黙を承認にしない。
+範囲外の部品追加、元資料の変更、別の3D生成サービスへの切替、確認済み資料パックの差替え、試行上限超過、利用条件不明の資産採用は自動実行しない。明示されたユーザーの修正指示が具体的な計画を特定できる場合は、その発言を承認根拠として新計画を記録し、同じ確認を繰り返さない。対象や範囲が曖昧な場合だけ確認する。沈黙を承認にしない。
 
 ## 3. 基本データ契約
 
@@ -28,7 +28,7 @@
 
 ## 4. 制作計画（親計画）
 
-親計画は `production_plans[]` に保持する。必須の固定内容は `project_id`、`part_plan_id` とその内容hash、使用する参照ID・版・ファイルhash、要件ID・版、`scope`、`deliverables`、`approval`。`scope` には対象部品ID、許す工程（image_prepare / blender_geometry / assembly / surface / inspect / source_export）、許す造形方式（blender_authoring / supplied_asset / triposr_legacy）、対象外、保持条件を入れる。
+親計画は `production_plans[]` に保持する。必須の固定内容は `project_id`、`part_plan_id` とその内容hash、使用する参照ID・版・ファイルhash、要件ID・版、`scope`、`deliverables`、`approval`。`scope` には対象部品ID、許す工程（image_prepare / geometry / assembly / surface / inspect / source_export）、造形方式 `blender_authoring`、対象外、保持条件を入れる。既存OBJの取り込みは入力資料であり、造形エンジンではない。
 
 試行上限は `max_reference_drafts_per_part`、`max_geometry_runs_per_part`、`max_assembly_runs`、`max_surface_runs` の正整数で指定する。開始した実行は失敗でも一回と数え、検証前に拒否した計画は数えない。`result_unknown` は調査が終わるまで枠を予約したままにする。部品ごとに `target_faces` と `max_faces`、見た目の判定観点、許す処理時間の目安を記す。共通の固定面数や品質点数は設けない。Codexが案件の用途と部品の見え方から値を提案し、ユーザーが親計画で確認する。
 
@@ -50,7 +50,7 @@
     "max_surface_runs": 2,
     "face_limits": {"<body-part-id>": {"target_faces": 3000, "max_faces": 6000}},
     "must_preserve": ["<requirement-id>"],
-    "excluded": ["triposr_legacy", "ue_export"]
+    "excluded": ["ue_export"]
   },
   "deliverables": ["editable_blend", "obj", "four_view_previews", "source_export"],
   "reason": "制作対象と保持条件を記述"
@@ -63,7 +63,7 @@
 
 `reference_packs[]` は `id / production_plan_id / part_plan_id / parent_pack_id / parts / files / content_hash / state / approval` を持つ。部品ごとの `parts` には部品ID、使う元資料IDと領域、優先順位、方向別画像または構築図、寸法・比率、接続アンカー、色・模様の領域、各方向の整合所見、推定と未確定事項を必須とする。画像には `method=original / crop / background_removal / image_generation / drawing / external` と由来を記す。元資料から派生した画像は元資料を置き換えない。
 
-正面・側面・背面等のうち造形に必要な方向を部品ごとに選ぶ。単純な球などは寸法付き構築図でよい。画像生成で補った背面や隠れた断面は `inferred=true` とし、根拠と確信度ではなく具体的な不確実性を書く。矛盾する正面・側面の輪郭、寸法、材質領域はパック承認前に列挙する。三面図の並置をTripoSRの複数視点入力とみなさない。
+正面・側面・背面等のうち造形に必要な方向を部品ごとに選ぶ。単純な球などは寸法付き構築図でよい。画像生成で補った背面や隠れた断面は `inferred=true` とし、根拠と確信度ではなく具体的な不確実性を書く。矛盾する正面・側面の輪郭、寸法、材質領域はパック承認前に列挙する。各方向の資料は由来と推定の有無を個別に管理する。
 
 Codexは必要な画像準備を実施し、外部画像生成ツールを使った場合も入力、処理方法、結果ファイルhashをCLIで登録する。画像生成アダプタがハーネス内にあるとは仮定しない。作成したパックは全対象部品を一括提示する。ユーザー承認後は `state=approved` と内容hashを保存する。変更時は新IDのパックを作り、旧パックと旧候補を残す。造形子計画の作成・実行時には、承認済みパックIDと一致するファイルhashが必須。
 
@@ -71,7 +71,7 @@ Codexは必要な画像準備を実施し、外部画像生成ツールを使っ
 
 ## 6. 子計画と承認の継承
 
-子計画は従来の `plans[]` に保持し、`production_plan_id`、必要なら `reference_pack_id`、`part_id`、`stage`、親候補ID、入力とコードのhash、Blender job／レシピ、出力予定、保持検査を固定する。`stage` は既存の image_prepare / geometry / assembly / surface を維持し、読み取り対象から追加画像・検査を作る `inspect` を追加する。Blender直接造形は `stage=geometry, engine=blender_authoring` で区別する。旧TripoSRは `engine=triposr_legacy`。既存計画で `engine` がない場合はver1の意味として読む。`source_export` は親計画の許可範囲に含めるが、既存 `project export` で実行し、子計画のstageにはしない。
+子計画は従来の `plans[]` に保持し、`production_plan_id`、必要なら `reference_pack_id`、`part_id`、`stage`、親候補ID、入力とコードのhash、Blender job／レシピ、出力予定、保持検査を固定する。`stage` は既存の image_prepare / geometry / assembly / surface を維持し、読み取り対象から追加画像・検査を作る `inspect` を追加する。新規造形は `stage=geometry, engine=blender_authoring` のみ。旧計画の `engine` 欄がない記録も読み取るが実行は拒否する。`source_export` は親計画の許可範囲に含めるが、既存 `project export` で実行し、子計画のstageにはしない。
 
 子計画は作成時に親計画の承認、対象部品・工程・方式、試行枠、参照・要件・部品構成、資料パックとそのhashを検査する。実行直前にも全て再検査する。適合した子計画の `state` は `approved` にし、`approval.kind=parent_scope`、親計画ID・親計画hash・資料パックID・資料パックhashを保存する。この記録は個別のユーザー承認を意味しない。親計画なしのver1互換経路は、従来どおり個別承認を要求する。二つの承認方式を混同しない。
 
@@ -131,7 +131,7 @@ mwb material create <project-id> --source <part-candidate-id> --file <material-r
 mwb candidate show <candidate-id> --trace
 ```
 
-`production approve` と `reference-pack approve` は対象とhashを表示して確認を記録する。Codexによる非対話操作では実際の会話承認を `--evidence` で渡す。対象IDが見つからない、複数案件で曖昧、hashが変わった場合は停止する。既存 `generate` / `edit` / `candidate` / `material` / `review` / `project export` は互換を保ち、親計画に紐づく子計画だけ承認継承を許す。`generate list --stage image_prepare` で画像準備計画を探せるようにする。
+`production approve` と `reference-pack approve` は対象とhashを表示して確認を記録する。Codexによる非対話操作では実際の会話承認を `--evidence` で渡す。対象IDが見つからない、複数案件で曖昧、hashが変わった場合は停止する。既存 `generate` / `edit` / `candidate` / `material` / `review` / `project export` のうち造形以外の操作と履歴閲覧を維持し、親計画に紐づく子計画だけ承認継承を許す。旧式の造形計画は作成・実行しない。`generate list --stage image_prepare` で画像準備計画を探せるようにする。
 
 `material-recipe.json` は少なくとも `name`、`intent`、`reference_regions`、`shader`（base_colorのsRGB値、roughness、metallic）、`zones`（領域名、割当条件、色・模様）、`uncertainties` を持つ。対応する部品形状候補以外へ適用しない。`candidate show --trace` は資料パック、親子計画、部品候補、run、材質、レビュー、exportへのID・案件相対パスを返す。ファイルを暗黙に開いたり候補を採用したりしない。
 
@@ -170,11 +170,11 @@ projects/<project-id>/
 
 実行時は案件ロックと重い外部処理の共通ロックを分け、処理開始前に `running` と予約済みrun IDを保存する。入力・スクリプト・設定hashを再照合し、成果物をrun内の一時領域で作成、再読込とhash検査後に `outputs/` へ確定して候補登録する。失敗・中断でも旧資料・旧候補・旧出力は残す。結果不明はログ、PID、開始時刻、出力を調査するまで再実行しない。ロックを経過時間だけで奪わない。
 
-旧案件はver2 CLIで参照・再開できる。旧run、`external-runs`、`inspections` のファイルは移動・削除しない。旧ファイルのうち索引に正式候補として登録されていないものを自動採用しない。必要なものは由来・hash・親候補を確認して新しいrunの正式候補として取り込む。recoveryは索引のチェックポイントであり、画像や.blendのバックアップではない。案件全体をバックアップする。
+旧案件はver2 CLIで参照できる。旧式の造形計画は再実行せず、必要なら新しいBlender親計画・資料パック・子計画を作る。旧run、`external-runs`、`inspections` のファイルは移動・削除しない。旧ファイルのうち索引に正式候補として登録されていないものを自動採用しない。必要なものは由来・hash・親候補を確認して新しいrunの正式候補として取り込む。recoveryは索引のチェックポイントであり、画像や.blendのバックアップではない。案件全体をバックアップする。
 
 ## 13. 実装順と検証
 
-実装起点はGitの `ver1.0` ブランチにある `mwb.py`、`src/model_workbench/`、`scripts/blender_workbench.py`。現行 `ver2.0` ブランチへコードを取り込む際は、Git対象外の `projects/` と `experiments/` を保全する。新規パッケージやTripoSR環境の更新は必要条件にしない。
+実装起点はGitの `ver1.0` ブランチにある `mwb.py`、`src/model_workbench/`、`scripts/blender_workbench.py`。現行 `ver2.0` ブランチでは、Git対象外の `projects/` と `experiments/` を保全する。新規パッケージや別の3D生成環境の導入は必要条件にしない。
 
 1. `storage.py` と `workflow.py` に旧案件を壊さない `production_plans` / `reference_packs` の読取・保存・固定hash・承認を追加する。CLIに第10章のコマンドを加える。
 2. 子計画の親範囲検査、試行枠、`approval.kind=parent_scope`、資料パックhash固定を追加する。従来の個別承認経路を保持する。

@@ -149,7 +149,7 @@ def parser():
     status.add_argument('project_id', nargs='?')
     cfg = group('config', '外部実行パスと保存先を表示')
     command(cfg, 'show', '設定を表示', False)
-    top.add_parser('doctor', help='実行ファイル・既存キャッシュの存在を調べる。インストール・生成は行わない')
+    top.add_parser('doctor', help='Blender実行ファイルの存在を調べる。インストール・生成は行わない')
     g = group('project', '案件の作成・一覧・採用・出力')
     c = command(g, 'create', '新しい案件を作成', False)
     c.add_argument('--name', required=True)
@@ -244,7 +244,7 @@ def parser():
         if name == 'image':
             c.add_argument('--plan', help='外部で実施した承認済みimage_prepare計画ID')
             c.add_argument('--method', choices=['crop', 'background_removal', 'image_generation', 'external'], default='external')
-            c = command(g, 'approve', 'ユーザーが見た生成用画像をTripoSR入力として承認')
+            c = command(g, 'approve', 'ユーザーが見た生成用画像を資料として承認')
             c.add_argument('candidate_id')
             c.add_argument('--hash', help='互換用のinput_hash')
             c.add_argument('--evidence', help='会話での明示承認。省略時は端末で画像IDとhashを確認')
@@ -266,7 +266,7 @@ def parser():
         c.add_argument('--stage', choices=STAGES, help='入力の種類から推定。曖昧なら明示する')
         c.add_argument('--prompt')
         if name == 'generate':
-            c.add_argument('--engine', choices=['blender_authoring', 'supplied_asset', 'triposr_legacy'])
+            c.add_argument('--engine', choices=['blender_authoring'])
             c.add_argument('--production')
             c.add_argument('--reference-pack')
             c.add_argument('--file', help='Blender造形レシピJSON')
@@ -378,8 +378,8 @@ def dispatch(args):
     if g == 'doctor':
         checks = {key: {'path': value, 'exists': Path(value).exists()} for key, value in config.items()}
         if not all(value['exists'] for value in checks.values()):
-            raise WorkflowError('必要な実行ファイルまたはキャッシュがありません。config showで設定を確認してください')
-        return {'checks': checks, 'scope': '存在確認のみ。CUDA・生成品質・互換性全体の保証ではない'}
+            raise WorkflowError('Blender実行ファイルがありません。config showで設定を確認してください')
+        return {'checks': checks, 'scope': 'Blender実行ファイルの存在確認のみ。造形品質や互換性全体の保証ではない'}
     if g == 'status':
         return wb.status(pid) if pid else [wb.status(d['id']) for d in store.list()]
     if g == 'project':
@@ -462,7 +462,7 @@ def dispatch(args):
     if g in ('asset', 'image'):
         if g == 'image' and a == 'approve':
             image = find(store.load(pid)['candidates'], args.candidate_id)
-            evidence = confirmation('この画像をTripoSR入力として承認（画像を実際に見てから回答）', image, args.evidence)
+            evidence = confirmation('この画像を造形資料として承認（画像を実際に見てから回答）', image, args.evidence)
             return wb.image_approve(pid, args.candidate_id, args.hash or fingerprint(image['files']), evidence)
         item = wb.candidate_import(pid, args.path, 'part' if g == 'asset' else 'prepared_image', args.part,
                                    args.description, getattr(args, 'plan', None), getattr(args, 'method', 'external'))

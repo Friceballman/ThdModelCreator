@@ -254,6 +254,8 @@ class Workbench:
              input_id=None, source_id=None, bindings=None, materials=None, edit=None):
         if stage not in STAGES:
             raise WorkflowError('未対応工程です')
+        if stage == 'geometry':
+            raise WorkflowError('部品造形は承認済み資料パックを使うBlender直接造形計画から作成してください')
         with self.store.update(project_id, 'plan_created') as doc:
             approved = [p for p in doc['part_plans'] if p['state'] == 'approved']
             if not approved:
@@ -266,18 +268,7 @@ class Workbench:
                 self.verify_file(project_id, ref)
             inputs, composition, material_snapshots = [], [], []
             source = copy.deepcopy(find(doc['candidates'], source_id)) if source_id else None
-            if stage == 'geometry':
-                image = copy.deepcopy(find(doc['candidates'], input_id))
-                if not part_id or image['kind'] != 'prepared_image' or image['part_id'] != part_id:
-                    raise WorkflowError('対象部品の生成用画像が必要です')
-                approval = image.get('input_approval')
-                if (not approval or approval['content_hash'] != fingerprint(image['files'])
-                        or image['status'] == 'rejected'):
-                    raise WorkflowError('生成用画像をユーザーが確認し、image approveで承認してから計画してください')
-                if source and (source['kind'] != 'part' or source['part_id'] != part_id):
-                    raise WorkflowError('再生成の親は同じ部品の形状候補が必要です')
-                inputs.append(image)
-            elif stage == 'assembly':
+            if stage == 'assembly':
                 if source and not edit:
                     raise WorkflowError('親候補を使うassembly計画は限定編集にしてください')
                 if not isinstance(bindings, list) or not bindings:
@@ -336,10 +327,9 @@ class Workbench:
                          references=refs, requirements=copy.deepcopy([r for r in doc['requirements'] if r['active']]),
                          part_plan=copy.deepcopy(structure), inputs=inputs, source=source,
                          composition=composition, materials=material_snapshots, edit=edit,
-                         chunk_size=1024, mc_resolution=128, adapter_config=copy.deepcopy(self.adapter_config))
+                         adapter_config=copy.deepcopy(self.adapter_config))
             implementation = list(Path(__file__).parent.glob('*.py'))
-            implementation += [Path(__file__).resolve().parents[2] / 'scripts' / 'blender_workbench.py',
-                               Path(__file__).resolve().parents[2] / 'scripts' / 'triposr_probe.py']
+            implementation += [Path(__file__).resolve().parents[2] / 'scripts' / 'blender_workbench.py']
             fixed['code'] = [{'path': str(p), 'sha256': sha(p)} for p in sorted(implementation) if p.is_file()]
             item = record(fixed=fixed, plan_hash=fingerprint(fixed), state='draft',
                           approval=None, candidates=[], error=None)

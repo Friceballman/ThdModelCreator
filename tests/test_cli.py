@@ -57,7 +57,7 @@ class ShortCliTests(unittest.TestCase):
         other = self.store.create('別案件', '分離確認')['id']
         self.run_cli('candidate', 'show', other, assets[0]['id'], code=3)
 
-    def test_image_register_and_geometry_inference_do_not_execute(self):
+    def test_image_register_does_not_enable_legacy_geometry(self):
         self.structure()
         plan = self.run_cli('generate', 'plan', self.pid, '--part', self.parts[1], '--prompt', '帽子画像の準備')
         self.run_cli('generate', 'request-approval', plan['id'])
@@ -66,11 +66,8 @@ class ShortCliTests(unittest.TestCase):
         self.run_cli('generate', 'plan', self.pid, '--input', image['id'], '--prompt', '未承認画像は不可', code=3)
         self.run_cli('image', 'approve', image['id'], '--evidence', '試験画像の確認')
         with patch('subprocess.Popen', side_effect=AssertionError('must not execute')):
-            geometry = self.run_cli('generate', 'plan', self.pid, '--input', image['id'], '--prompt', '帽子一回')
-        self.assertEqual(geometry['fixed']['stage'], 'geometry')
-        self.assertEqual(geometry['fixed']['part_id'], self.parts[1])
+            self.run_cli('generate', 'plan', self.pid, '--input', image['id'], '--prompt', '旧方式', code=3)
         self.assertEqual(len(self.run_cli('candidate', 'list', self.pid, '--generation', plan['id'])), 1)
-        self.run_cli('report', 'show', geometry['id'])
 
     def test_approval_needs_confirmation_and_rechecks_displayed_hash(self):
         p = self.structure()

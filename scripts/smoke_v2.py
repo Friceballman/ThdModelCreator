@@ -30,7 +30,7 @@ def main():
                  'max_reference_drafts_per_part': 1, 'max_geometry_runs_per_part': 2,
                  'max_assembly_runs': 2, 'max_surface_runs': 2,
                  'face_limits': {part_id: {'target_faces': 12, 'max_faces': 20}},
-                 'must_preserve': [requirement['id']], 'excluded': ['triposr_legacy']}
+                 'must_preserve': [requirement['id']], 'excluded': ['ue_export']}
         production = wb.production_plan(pid, {'part_plan_id': structure['id'],
             'reference_ids': [reference['id']], 'requirement_ids': [requirement['id']],
             'scope': scope, 'deliverables': ['editable_blend', 'obj', 'four_view_previews'],

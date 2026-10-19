@@ -1,4 +1,4 @@
-"""Repository-local launcher. No install into the TripoSR environment required."""
+"""Repository-local launcher for the Blender-backed workbench."""
 from pathlib import Path
 import sys
 

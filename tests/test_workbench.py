@@ -175,18 +175,30 @@ class WorkbenchTests(unittest.TestCase):
             self.wb.requirement_add(self.pid, 'must_keep', '状態保全')
         self.assertTrue(lock.exists())
 
-    def test_geometry_input_and_parent_must_match_the_target_part(self):
+    def test_legacy_geometry_creation_is_rejected_without_writing(self):
         self.assets()
         image = self.wb.candidate_import(self.pid, self.image, 'prepared_image', self.parts[0], '生成用の試験画像')
-        self.wb.image_approve(self.pid, image['id'], fingerprint(image['files']), '試験画像の入力を確認')
+        before = self.store.load(self.pid)
         with self.assertRaises(WorkflowError):
-            self.wb.plan(self.pid, 'geometry', '別部品には使用しない', part_id=self.parts[1], input_id=image['id'])
-        with self.assertRaises(WorkflowError):
-            self.wb.plan(self.pid, 'geometry', '別部品を親にしない', part_id=self.parts[0], input_id=image['id'], source_id=self.candidates[1]['id'])
-        plan = self.wb.plan(self.pid, 'geometry', '同じ部品からの再生成計画だけ作成',
-                            part_id=self.parts[0], input_id=image['id'], source_id=self.candidates[0]['id'])
-        self.assertEqual(plan['fixed']['source']['id'], self.candidates[0]['id'])
-        self.assertEqual(plan['state'], 'draft')
+            self.wb.plan(self.pid, 'geometry', '旧方式', part_id=self.parts[0], input_id=image['id'])
+        self.assertEqual(self.store.load(self.pid)['plans'], before['plans'])
+
+    def test_existing_legacy_geometry_plan_cannot_execute(self):
+        self.structure()
+        legacy = record(fixed={'stage': 'geometry'}, state='approved', approval={'evidence': '旧計画'})
+        with self.store.update(self.pid, 'legacy_fixture') as doc:
+            doc['plans'].append(legacy)
+        before = (self.store.directory(self.pid) / 'project.json').read_bytes()
+        with patch('subprocess.Popen', side_effect=AssertionError('must not launch')):
+            with self.assertRaisesRegex(WorkflowError, '旧式の造形計画'):
+                execute(self.wb, self.pid, legacy['id'], self.config)
+        self.assertEqual((self.store.directory(self.pid) / 'project.json').read_bytes(), before)
+
+    def test_runtime_config_rejects_external_adapter_fields(self):
+        path = self.root / 'config.json'
+        write(path, {'blender': self.config['blender'], 'other_backend': 'outside'})
+        with self.assertRaisesRegex(WorkflowError, 'blenderのパスだけ'):
+            load_config(path)
 
     def test_image_preparation_is_parented_and_needs_separate_input_approval(self):
         self.structure()
@@ -203,11 +215,10 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(result['parent_id'], first['id'])
         self.assertEqual(find(self.store.load(self.pid)['plans'], plan['id'])['result_method'], 'external_result_import')
         with self.assertRaises(WorkflowError):
-            self.wb.plan(self.pid, 'geometry', '結果も未確認', part_id=self.parts[0], input_id=result['id'])
-        with self.assertRaises(WorkflowError):
             self.wb.image_approve(self.pid, result['id'], 'wrong', '入力確認')
         self.wb.image_approve(self.pid, result['id'], fingerprint(result['files']), '元資料と一致する入力画像を確認')
-        self.wb.plan(self.pid, 'geometry', '計画のみ', part_id=self.parts[0], input_id=result['id'])
+        with self.assertRaises(WorkflowError):
+            self.wb.plan(self.pid, 'geometry', '旧方式は不可', part_id=self.parts[0], input_id=result['id'])
         self.assertEqual(find(self.store.load(self.pid)['candidates'], first['id'])['files'], first['files'])
 
     def test_resume_checks_damage_without_repairing_or_unlocking(self):

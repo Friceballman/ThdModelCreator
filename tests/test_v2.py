@@ -34,7 +34,7 @@ class V2Tests(unittest.TestCase):
                  'max_reference_drafts_per_part': 2, 'max_geometry_runs_per_part': max_runs,
                  'max_assembly_runs': 2, 'max_surface_runs': 2,
                  'face_limits': {self.part_id: {'target_faces': 20, 'max_faces': 100}},
-                 'must_preserve': [self.req['id']], 'excluded': ['triposr_legacy']}
+                 'must_preserve': [self.req['id']], 'excluded': ['ue_export']}
         item = self.wb.production_plan(self.pid, {
             'part_plan_id': self.structure['id'], 'reference_ids': [self.ref['id']],
             'requirement_ids': [self.req['id']], 'scope': scope,

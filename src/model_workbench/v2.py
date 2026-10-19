@@ -15,7 +15,7 @@ from .workflow import Workbench, image_info, require_text
 REPO = Path(__file__).resolve().parents[2]
 
 STAGES = {'image_prepare', 'geometry', 'assembly', 'surface', 'inspect', 'source_export'}
-ENGINES = {'blender_authoring', 'supplied_asset', 'triposr_legacy'}
+ENGINES = {'blender_authoring'}
 METHODS = {'original', 'crop', 'background_removal', 'image_generation', 'drawing', 'external'}
 
 

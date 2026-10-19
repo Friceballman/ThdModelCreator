@@ -8,7 +8,6 @@ import subprocess
 import time
 
 from .storage import WorkflowError, find, fingerprint, no_links, read, record, sha, uid, write
-from .workflow import obj_info
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -16,7 +15,9 @@ REPO = Path(__file__).resolve().parents[2]
 def load_config(path):
     path = no_links(path)
     config = read(path)
-    for key in ('triposr_root', 'triposr_python', 'blender', 'hf_home', 'u2net_home'):
+    if set(config) != {'blender'}:
+        raise WorkflowError('実行設定はblenderのパスだけを指定してください')
+    for key in ('blender',):
         value = Path(config[key])
         config[key] = str(no_links(value if value.is_absolute() else path.parent / value))
     return config
@@ -48,6 +49,8 @@ def execute(workbench, project_id, plan_id, config):
     existing = find(store.load(project_id)['plans'], plan_id)
     if existing['fixed'].get('engine') == 'blender_authoring':
         return execute_authoring(workbench, project_id, plan_id, config)
+    if existing['fixed'].get('stage') == 'geometry':
+        raise WorkflowError('旧式の造形計画は実行できません。Blender直接造形の新しい計画を作成してください')
     failure = None
     result = None
     with store.update(project_id, 'plan_executed') as doc:
@@ -101,20 +104,9 @@ def execute(workbench, project_id, plan_id, config):
             if not fixed.get('production_plan_id'):
                 write(folder / 'plan.json', plan)
             env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8',
-                       PYTHONUNBUFFERED='1', HF_HOME=config['hf_home'], U2NET_HOME=config['u2net_home'],
-                       HF_HUB_OFFLINE='1', TRANSFORMERS_OFFLINE='1', NUMBA_CACHE_DIR=str(folder / 'numba'))
+                       PYTHONUNBUFFERED='1')
             parent = fixed['source']
-            if fixed['stage'] == 'geometry':
-                source = workbench.verify_file(project_id, fixed['inputs'][0]['files'][0])
-                metrics = process([config['triposr_python'], '-B', str(REPO / 'scripts/triposr_probe.py'),
-                                   '--root', config['triposr_root'], '--image', str(source),
-                                   '--output', str(folder / 'generated'), '--chunk-size', '1024', '--mc-resolution', '128'],
-                                  folder / 'triposr.log', env, config['triposr_root'])
-                obj_info(folder / 'generated/0/mesh.obj')
-                metrics['model'] = read(folder / 'generated/metrics.json')
-                artifact_folder = folder / 'generated/0'
-                kind, stage = 'part', 'geometry'
-            else:
+            if fixed['stage'] in ('assembly', 'surface'):
                 parts = []
                 if fixed['stage'] == 'assembly':
                     for binding, candidate in zip(fixed['composition'], fixed['inputs']):
@@ -145,6 +137,8 @@ def execute(workbench, project_id, plan_id, config):
                     artifact_folder.rename(folder / 'outputs')
                     artifact_folder = folder / 'outputs'
                 kind, stage = 'character', 'surface' if fixed['stage'] == 'surface' else 'geometry'
+            else:
+                raise WorkflowError('未対応の実行工程です')
             files = [{'file': f.relative_to(store.directory(project_id)).as_posix(), 'sha256': sha(f)}
                      for f in sorted(artifact_folder.rglob('*')) if f.is_file()]
             if not files:
