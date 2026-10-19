@@ -5,7 +5,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from model_workbench.storage import Store
+from model_workbench.storage import Store, WorkflowError, read
 from model_workbench.v2 import V2Workbench
 from model_workbench.runtime import execute, load_config, REPO
 
@@ -27,7 +27,7 @@ def main():
         part_id = structure['parts'][0]['id']
         scope = {'part_ids': [part_id], 'stages': ['geometry', 'assembly', 'surface', 'inspect', 'source_export'],
                  'geometry_engines': ['blender_authoring'], 'allowed_edits': ['part_shape', 'part_transform', 'material_parameters'],
-                 'max_reference_drafts_per_part': 1, 'max_geometry_runs_per_part': 2,
+                 'max_reference_drafts_per_part': 1, 'max_geometry_runs_per_part': 3,
                  'max_assembly_runs': 2, 'max_surface_runs': 2,
                  'face_limits': {part_id: {'target_faces': 12, 'max_faces': 20}},
                  'must_preserve': [requirement['id']], 'excluded': ['ue_export']}
@@ -53,16 +53,29 @@ def main():
         candidate = execute(wb, pid, plan['id'], config)
         for file in candidate['files']:
             wb.verify_file(pid, file)
-        source_blend = next(wb.verify_file(pid, f) for f in candidate['files'] if f['file'].endswith('.blend'))
+        assert not any(f['file'].endswith('.png') for f in candidate['files'])
+        revision_script = root / 'revise_cube.py'
+        revision_script.write_text('def build(job):\n    import bpy\n    mesh = next(o for o in bpy.context.scene.objects if o.type == "MESH")\n    mesh.data.vertices[0].co.x += 0.05\n', encoding='utf-8')
+        revision_plan = wb.geometry_plan(pid, production['id'], pack['id'], part_id,
+            {'script': str(revision_script), 'intent': '前候補の頂点を局所修正',
+             'state_keywords': ['二立方体', '頂点調整済み'], 'change_keywords': ['頂点を0.05m移動']},
+            source_id=candidate['id'])
+        candidate_revision = execute(wb, pid, revision_plan['id'], config)
+        assert candidate_revision['parent_id'] == candidate['id']
+        assert candidate_revision['state_keywords'] == ['二立方体', '頂点調整済み']
+        assert not any(f['file'].endswith('.png') for f in candidate_revision['files'])
+        source_blend = next(wb.verify_file(pid, f) for f in candidate_revision['files'] if f['file'].endswith('.blend'))
         edited_blend = root / 'edited.blend'
         edit_script = root / 'edit_fixture.py'
         edit_script.write_text('import bpy, sys\na = sys.argv[sys.argv.index("--") + 1:]\nbpy.ops.wm.open_mainfile(filepath=a[0], use_scripts=False)\nmesh = next(o for o in bpy.context.scene.objects if o.type == "MESH")\nmesh.data.vertices[0].co.x += 0.1\nbpy.ops.wm.save_as_mainfile(filepath=a[1])\n', encoding='utf-8')
         subprocess.run([config['blender'], '--background', '--factory-startup', '--disable-autoexec',
                         '--python-exit-code', '1', '--python', str(edit_script), '--',
                         str(source_blend), str(edited_blend)], check=True, capture_output=True)
-        edited = wb.revision_run(pid, candidate['id'], production['id'],
+        edited = wb.revision_run(pid, candidate_revision['id'], production['id'],
                                  {'mode': 'part_shape', 'target_part_ids': [part_id],
-                                  'changed_by': 'test', 'reason': '頂点を0.1m修正'}, edited_blend)
+                                  'changed_by': 'test', 'reason': '頂点を0.1m修正',
+                                  'state_keywords': ['二立方体', '頂点手修正済み'],
+                                  'change_keywords': ['頂点を0.1m移動']}, edited_blend)
         binding = {'part_id': part_id, 'candidate_id': edited['id'],
                    'location': [0, 0, 0], 'rotation_degrees': [0, 0, 0], 'scale': [1, 1, 1]}
         assembly = wb.plan(pid, 'assembly', '2オブジェクトを仮組み', bindings=[binding],
@@ -93,12 +106,7 @@ def main():
             if log.exists():
                 print(log.read_text(encoding='utf-8', errors='replace'))
             raise
-        previews = [f['file'] for f in placed['files'] if f['file'].endswith('.png')]
-        wb.review(pid, placed['id'], [{'requirement_id': requirement['id'], 'result': 'uncertain',
-                                       'reason': '機械的な接続試験のみで審美評価はしていない',
-                                       'impact': '実案件の輪郭一致は別途確認が必要',
-                                       'directions': ['front', 'side', 'back', 'oblique'],
-                                       'image_files': previews}], '試験の形状自己点検', actor='codex')
+        assert not any(f['file'].endswith('.png') for f in placed['files'])
         wb.candidate_state(pid, placed['id'], 'confirm-shape', '試験で形状を確認')
         material = wb.material_recipe_create(pid, edited['id'], {
             'name': '灰色', 'intent': '資料の無彩色を再現', 'reference_regions': [],
@@ -136,8 +144,28 @@ def main():
         revised = wb.revision_run(pid, finished['id'], production['id'],
                                   {'mode': 'material_parameters', 'target_part_ids': [part_id],
                                    'changed_by': 'test', 'reason': '色を変更'}, material_edit)
+        previews = [f['file'] for f in revised['files'] if f['file'].endswith('.png')]
+        assert len(previews) == 4
+        wb.review(pid, revised['id'], [{'requirement_id': requirement['id'], 'result': 'uncertain',
+                                        'reason': '接続試験で審美評価はしていない',
+                                        'impact': '実案件の輪郭一致は別途確認が必要',
+                                        'directions': ['front', 'side', 'back', 'oblique'],
+                                        'image_files': previews}], '最終品の自己点検', actor='codex')
+        assert wb.store.path(pid, material['files'][0]['file']).is_file()
         wb.candidate_state(pid, revised['id'], 'select', '試験候補を選択')
+        try:
+            wb.set_approved(pid, revised['id'], 'レビュー前の採用を拒否する試験')
+            raise AssertionError('ユーザーレビューのゲートを通過してしまいました')
+        except WorkflowError:
+            pass
+        wb.review(pid, revised['id'], [{'requirement_id': requirement['id'],
+                                        'result': 'uncertain', 'reason': '試験用の模擬レビュー'}],
+                  '実ユーザーではない試験フィクスチャ', actor='user')
+        wb.set_approved(pid, revised['id'], '試験フィクスチャとして正式採用')
         exported = wb.export(pid, 'smoke-v2', '試験出力')
+        manifest = read(store.path(pid, exported['file']))
+        assert any('/dependencies/materials/' in f['file']
+                   for f in manifest['candidates'][0]['files'])
         print({'candidate_id': revised['id'], 'faces': candidate['checks']['faces'],
                'geometry_files': len(candidate['files']), 'stages': [p['state'] for p in store.load(pid)['plans']],
                'inspection_run_id': inspection['inspection_run_id'], 'export': exported['file']})

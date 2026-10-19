@@ -306,6 +306,7 @@ def parser():
     c = command(g, 'list', '候補一覧')
     c.add_argument('--kind', choices=['prepared_image', 'part', 'character'])
     c.add_argument('--generation', help='生成計画IDで候補を絞る')
+    c.add_argument('--keyword', help='状態キーワードで候補を絞る')
     c.add_argument('--terminal', action='store_true')
     for action in ('show', 'select', 'hold', 'reject', 'confirm-shape'):
         c = command(g, action, action)
@@ -322,6 +323,10 @@ def parser():
     c = command(g, 'inspect', '元候補を変更せず追加の4方向点検を作成')
     c.add_argument('candidate_id')
     c.add_argument('--production', required=True)
+    c = command(g, 'keywords', '候補の状態キーワード一覧を記録')
+    c.add_argument('candidate_id')
+    c.add_argument('--keyword', action='append', default=[], help='状態キーワード。複数回指定')
+    c.add_argument('--reason', required=True)
     c = command(g, 'compare', '候補IDを2件以上指定。旧構文の先頭案件IDも使用可', project=False)
     c.add_argument('candidate_ids', nargs='+')
     c = top.add_parser('review', help='要件別レビューを保存')
@@ -484,7 +489,8 @@ def dispatch(args):
             if g == 'generate' and args.engine == 'blender_authoring':
                 if args.stage != 'geometry' or not all((args.production, args.reference_pack, args.part, args.file)):
                     raise WorkflowError('Blender造形には--stage geometry、--production、--reference-pack、--part、--fileが必要です')
-                return wb.geometry_plan(pid, args.production, args.reference_pack, args.part, read(args.file))
+                return wb.geometry_plan(pid, args.production, args.reference_pack, args.part,
+                                        read(args.file), source_id=args.source)
             if not args.prompt:
                 raise WorkflowError('従来方式の計画には--promptが必要です')
             return make_plan(wb, store, pid, args)
@@ -516,9 +522,12 @@ def dispatch(args):
             return wb.revision_run(pid, args.source, args.production, read(args.file), args.blend_path)
         if a == 'inspect':
             return wb.revision_run(pid, args.candidate_id, args.production)
+        if a == 'keywords':
+            return wb.candidate_keywords(pid, args.candidate_id, args.keyword, args.reason)
         if a == 'list':
             return [c for c in candidates if (not args.kind or c['kind'] == args.kind)
-                    and (not args.generation or c.get('generation_id') == args.generation)]
+                    and (not args.generation or c.get('generation_id') == args.generation)
+                    and (not args.keyword or args.keyword in c.get('state_keywords', []))]
         if a == 'show':
             item = find(candidates, args.candidate_id)
             if args.trace:

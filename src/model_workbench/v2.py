@@ -8,15 +8,32 @@ from pathlib import Path
 import shutil
 import math
 import subprocess
+import unicodedata
 
 from .storage import WorkflowError, find, fingerprint, no_links, read, record, sha, uid, write
-from .workflow import Workbench, image_info, require_text
+from .workflow import Workbench, image_info, require_text, started_runs
 
 REPO = Path(__file__).resolve().parents[2]
 
 STAGES = {'image_prepare', 'geometry', 'assembly', 'surface', 'inspect', 'source_export'}
 ENGINES = {'blender_authoring'}
 METHODS = {'original', 'crop', 'background_removal', 'image_generation', 'drawing', 'external'}
+
+
+def state_keywords(value):
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > 32:
+        raise WorkflowError('状態キーワードは最大32件の配列です')
+    result = []
+    for keyword in value:
+        if (not isinstance(keyword, str) or not keyword.strip() or keyword != keyword.strip()
+                or len(keyword) > 64 or any(unicodedata.category(char).startswith('C') for char in keyword)):
+            raise WorkflowError('状態キーワードは前後の空白・制御文字のない1〜64文字です')
+        if keyword in result:
+            raise WorkflowError('状態キーワードの重複はできません')
+        result.append(keyword)
+    return result
 
 
 def _positive(value, label):
@@ -33,6 +50,16 @@ def _file(store, project_id, entry):
 
 
 class V2Workbench(Workbench):
+    def candidate_keywords(self, project_id, candidate_id, keywords, reason):
+        after = state_keywords(keywords)
+        with self.store.update(project_id, 'candidate_keywords_updated') as doc:
+            candidate = find(doc['candidates'], candidate_id)
+            before = state_keywords(candidate.get('state_keywords', []))
+            candidate['state_keywords'] = after
+            candidate.setdefault('history', []).append(record(action='state_keywords',
+                                                              before=before, after=after,
+                                                              reason=require_text(reason)))
+        return candidate
     def material_recipe_create(self, project_id, source_id, recipe):
         if not isinstance(recipe, dict):
             raise WorkflowError('材質レシピはJSONオブジェクトが必要です')
@@ -88,6 +115,11 @@ class V2Workbench(Workbench):
                           provenance='recipe', color=color, roughness=shader['roughness'],
                           metallic=shader['metallic'], method='principled_parameters',
                           uv_verified=False, textures=[])
+            relative = f'materials/{item["id"]}/recipe.json'
+            target = self.store.path(project_id, relative)
+            write(target, {'material_id': item['id'], 'part_id': source['part_id'],
+                           'source_shape_candidate_id': source_id, 'recipe': copy.deepcopy(recipe)})
+            item['files'] = [{'file': relative, 'sha256': sha(target)}]
             doc['materials'].append(item)
         return item
 
@@ -122,6 +154,10 @@ class V2Workbench(Workbench):
             require_text(edit.get('reason'))
             if edit.get('mode') not in ('part_shape', 'part_transform', 'material_parameters'):
                 raise WorkflowError('手修正の種類が不正です')
+            if 'state_keywords' in edit:
+                state_keywords(edit['state_keywords'])
+            if 'change_keywords' in edit:
+                state_keywords(edit['change_keywords'])
             external = no_links(incoming)
             if not external.is_file() or external.suffix.lower() != '.blend':
                 raise WorkflowError('手修正入力は既存の.blendファイルが必要です')
@@ -159,10 +195,9 @@ class V2Workbench(Workbench):
                 scope = production['fixed']['scope']
                 limit = (scope['max_geometry_runs_per_part'] if stage == 'geometry' else
                          scope['max_assembly_runs'] if stage == 'assembly' else scope['max_surface_runs'])
-                consumed = sum(p.get('production_plan_id') == production_id and
-                               p['fixed']['stage'] == stage and p['state'] != 'cancelled' and
-                               (stage != 'geometry' or p.get('part_id') in edit['target_part_ids'])
-                               for p in doc['plans'])
+                consumed = (sum(started_runs(doc, production_id, stage, part_id)
+                                for part_id in edit['target_part_ids']) if stage == 'geometry' else
+                            started_runs(doc, production_id, stage))
                 if consumed >= limit:
                     raise WorkflowError('手修正の試行上限に達しています')
             run_id = uid()
@@ -206,7 +241,9 @@ class V2Workbench(Workbench):
                 job = {'mode': mode, 'source': str(original), 'output': str(pending),
                        'edit': edit, 'incoming': str(folder / 'input.blend') if external else None,
                        'material_ids': material_ids,
-                       'composition': source.get('composition', [])}
+                       'composition': source.get('composition', []),
+                       'render_previews': source['kind'] == 'character' and
+                       (edit is None or source.get('stage') == 'surface')}
                 command = [self.adapter_config['blender'], '--background', '--factory-startup',
                            '--disable-autoexec', '--python-exit-code', '1', '--python',
                            str(REPO / 'scripts' / 'blender_revision.py'), '--', str(folder / 'job.json')]
@@ -217,8 +254,10 @@ class V2Workbench(Workbench):
                 checks = read(pending / 'checks.json')
                 if checks.get('success') is not True or checks.get('mode') != mode:
                     raise WorkflowError('Blenderによる差分検査が不合格です')
-                required = ['model.blend', 'model.obj', 'checks.json', 'previews/front.png',
-                            'previews/side.png', 'previews/back.png', 'previews/oblique.png']
+                required = ['model.blend', 'model.obj', 'checks.json']
+                if job['render_previews']:
+                    required += ['previews/front.png', 'previews/side.png',
+                                 'previews/back.png', 'previews/oblique.png']
                 for name in required:
                     path = pending / name
                     if not path.is_file() or not path.stat().st_size:
@@ -266,6 +305,15 @@ class V2Workbench(Workbench):
                                               roughness=base['roughness'], metallic=base['metallic'],
                                               method='manual_blend', uv_verified=False, textures=[])
                             material['id'] = material_id
+                            relative = f'materials/{material_id}/recipe.json'
+                            target = self.store.path(project_id, relative)
+                            write(target, {'material_id': material_id, 'part_id': part_id,
+                                           'source_shape_candidate_id': bindings[part_id],
+                                           'recipe': {'name': material['name'], 'intent': material['intent'],
+                                                      'reference_regions': material['reference_regions'],
+                                                      'shader': material['shader'], 'zones': material['zones'],
+                                                      'uncertainties': material['uncertainties']}})
+                            material['files'] = [{'file': relative, 'sha256': sha(target)}]
                             doc['materials'].append(material)
                             material_snapshots.append(copy.deepcopy(material))
                     candidate = record(project_id=project_id, kind=source['kind'], part_id=source.get('part_id'),
@@ -277,7 +325,10 @@ class V2Workbench(Workbench):
                                        shape_confirmed=False if stage != 'surface' else source.get('shape_confirmed', False),
                                        ue_verified=False, production_plan_id=production_id,
                                        reference_pack_id=source.get('reference_pack_id'), run_id=run_id,
-                                       checks=checks)
+                                       checks=checks,
+                                       state_keywords=state_keywords(edit.get('state_keywords',
+                                                                        source.get('state_keywords', []))),
+                                       change_keywords=state_keywords(edit.get('change_keywords', [])))
                     doc['candidates'].append(candidate)
                     plan['candidates'] = [candidate['id']]
                     outcome = candidate
@@ -314,10 +365,7 @@ class V2Workbench(Workbench):
         scope = production['fixed']['scope']
         limit = (scope['max_reference_drafts_per_part'] if stage == 'image_prepare' else
                  scope['max_assembly_runs'] if stage == 'assembly' else scope['max_surface_runs'])
-        if sum(p.get('production_plan_id') == production_id and p['fixed']['stage'] == stage
-               and p['state'] != 'cancelled' and
-               (stage != 'image_prepare' or p.get('part_id') == part_id)
-               for p in doc['plans']) >= limit:
+        if started_runs(doc, production_id, stage, part_id if stage == 'image_prepare' else None) >= limit:
             raise WorkflowError('工程の試行上限に達しています')
         pack_id = None
         if stage == 'image_prepare':
@@ -436,8 +484,10 @@ class V2Workbench(Workbench):
                 plan.update(state='approved', approval=record(evidence=require_text(evidence),
                                                              content_hash=plan['content_hash']))
             elif action == 'cancel' and plan['state'] in ('draft', 'awaiting_approval', 'approved'):
-                if any(p.get('production_plan_id') == plan_id and p['state'] in ('running', 'result_unknown') for p in doc['plans']):
-                    raise WorkflowError('実行中・結果不明の子計画があります')
+                if any(p.get('production_plan_id') == plan_id and
+                       p['state'] in ('running', 'succeeded', 'failed', 'result_unknown')
+                       for p in doc['plans']):
+                    raise WorkflowError('実行開始済みの子計画がある親計画は取消できません')
                 plan.update(state='cancelled', cancellation=record(reason=require_text(evidence)))
             else:
                 raise WorkflowError('この状態では操作できません')
@@ -553,9 +603,11 @@ class V2Workbench(Workbench):
                 raise WorkflowError('この状態では操作できません')
         return pack
 
-    def geometry_plan(self, project_id, production_id, pack_id, part_id, recipe):
+    def geometry_plan(self, project_id, production_id, pack_id, part_id, recipe, source_id=None):
         if not isinstance(recipe, dict) or not recipe.get('script') or not recipe.get('intent'):
             raise WorkflowError('造形レシピにはscriptとintentが必要です')
+        after_keywords = state_keywords(recipe.get('state_keywords'))
+        change_keywords = state_keywords(recipe.get('change_keywords'))
         script = no_links(recipe['script'])
         if not script.is_file() or script.suffix.lower() != '.py':
             raise WorkflowError('造形スクリプトは実在する.pyファイルが必要です')
@@ -567,8 +619,25 @@ class V2Workbench(Workbench):
                 raise WorkflowError('親計画・資料パック・部品の範囲が一致しません')
             if 'geometry' not in scope['stages'] or 'blender_authoring' not in scope['geometry_engines']:
                 raise WorkflowError('Blender直接造形が親計画で許可されていません')
-            consumed = sum(p.get('production_plan_id') == production_id and p.get('part_id') == part_id
-                           and p.get('fixed', {}).get('stage') == 'geometry' for p in doc['plans'])
+            source = None
+            source_blend = None
+            before_keywords = []
+            if source_id:
+                source = find(doc['candidates'], source_id)
+                if (source['kind'] != 'part' or source.get('part_id') != part_id or
+                        source.get('production_plan_id') != production_id or
+                        source.get('reference_pack_id') != pack_id or source['status'] == 'rejected'):
+                    raise WorkflowError('修正元は同じ親計画・資料パック・部品の有効な候補が必要です')
+                source_blend = next((f for f in source['files'] if f['file'].endswith('.blend')), None)
+                if not source_blend:
+                    raise WorkflowError('修正元に編集可能な.blendがありません')
+                self.verify_file(project_id, source_blend)
+                before_keywords = state_keywords(source.get('state_keywords', []))
+                if 'state_keywords' not in recipe:
+                    after_keywords = before_keywords.copy()
+                if not change_keywords:
+                    raise WorkflowError('前候補の修正にはchange_keywordsで変更点を列挙してください')
+            consumed = started_runs(doc, production_id, 'geometry', part_id)
             if consumed >= scope['max_geometry_runs_per_part']:
                 raise WorkflowError('部品の造形試行上限に達しています')
             run_id = uid()
@@ -580,14 +649,17 @@ class V2Workbench(Workbench):
             if script_hash != sha(script):
                 raise WorkflowError('造形スクリプトがコピー中に変わりました')
             input_manifest = folder / 'input-manifest.json'
-            write(input_manifest, {'files': pack['files'], 'production_plan_id': production_id,
-                                   'reference_pack_id': pack_id})
+            write(input_manifest, {'files': pack['files'] + ([source_blend] if source_blend else []),
+                                   'production_plan_id': production_id,
+                                   'reference_pack_id': pack_id, 'source_candidate_id': source_id})
             job_file = folder / 'job.json'
             command = [self.adapter_config['blender'], '--background', '--factory-startup',
                        '--disable-autoexec', '--python-exit-code', '1', '--python',
                        str(REPO / 'scripts' / 'blender_authoring.py'), '--', str(job_file)]
             write(job_file, {'script': str(action), 'output': str(folder / 'outputs.pending'),
                              'part_id': part_id, 'intent': recipe['intent'],
+                             'source_blend': str(self.verify_file(project_id, source_blend)) if source_blend else None,
+                             'source_candidate_id': source_id,
                              'face_limit': scope['face_limits'][part_id],
                              'recipe': {k: copy.deepcopy(v) for k, v in recipe.items() if k != 'script'},
                              'command': command})
@@ -595,6 +667,9 @@ class V2Workbench(Workbench):
                      'production_plan_id': production_id, 'production_hash': production['content_hash'],
                      'reference_pack_id': pack_id, 'reference_pack_hash': pack['content_hash'],
                      'part_id': part_id, 'part_plan_id': pack['part_plan_id'],
+                     'source_candidate_id': source_id, 'source_blend': copy.deepcopy(source_blend),
+                     'state_keywords_before': before_keywords, 'state_keywords_after': after_keywords,
+                     'change_keywords': change_keywords,
                      'run_id': run_id, 'script': f'runs/{run_id}/action.py', 'script_hash': script_hash,
                      'adapter_hash': sha(REPO / 'scripts' / 'blender_authoring.py'),
                      'job_hash': sha(job_file), 'input_manifest_hash': sha(input_manifest),

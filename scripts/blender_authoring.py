@@ -24,8 +24,11 @@ def main(job_file):
     job = json.loads(Path(job_file).read_text(encoding='utf-8'))
     output = Path(job['output'])
     output.mkdir(parents=True, exist_ok=False)
-    bpy.ops.object.select_all(action='SELECT')
-    bpy.ops.object.delete(use_global=False)
+    if job.get('source_blend'):
+        bpy.ops.wm.open_mainfile(filepath=job['source_blend'], use_scripts=False)
+    else:
+        bpy.ops.object.select_all(action='SELECT')
+        bpy.ops.object.delete(use_global=False)
     scene = bpy.context.scene
     scene.unit_settings.system = 'METRIC'
     scene.unit_settings.scale_length = 1.0
@@ -77,34 +80,9 @@ def main(job_file):
 
     mins = [min(v[i] for v in all_world) for i in range(3)]
     maxs = [max(v[i] for v in all_world) for i in range(3)]
-    center = Vector([(a + b) * 0.5 for a, b in zip(mins, maxs)])
     span = max(maxs[i] - mins[i] for i in range(3))
     if span <= 0 or not math.isfinite(span):
         raise ValueError('Invalid bounding box')
-    ortho = span * 1.6
-    scene.render.engine = 'BLENDER_WORKBENCH'
-    scene.render.resolution_x = 512
-    scene.render.resolution_y = 512
-    scene.render.resolution_percentage = 100
-    scene.render.image_settings.file_format = 'PNG'
-    scene.render.film_transparent = True
-    camera_data = bpy.data.cameras.new('mwb_preview_camera')
-    camera = bpy.data.objects.new('mwb_preview_camera', camera_data)
-    scene.collection.objects.link(camera)
-    scene.camera = camera
-    camera_data.type = 'ORTHO'
-    camera_data.ortho_scale = ortho
-    preview_dir = output / 'previews'
-    preview_dir.mkdir()
-    directions = {'front': (0, -1, 0), 'side': (1, 0, 0),
-                  'back': (0, 1, 0), 'oblique': (1, -1, 0.5)}
-    for name, vector in directions.items():
-        direction = Vector(vector).normalized()
-        camera.location = center + direction * span * 2.5
-        camera.rotation_euler = (center - camera.location).to_track_quat('-Z', 'Y').to_euler()
-        scene.render.filepath = str(preview_dir / f'{name}.png')
-        bpy.ops.render.render(write_still=True)
-    bpy.data.objects.remove(camera, do_unlink=True)
     bpy.ops.wm.save_as_mainfile(filepath=str(output / 'model.blend'))
     bpy.ops.wm.obj_export(filepath=str(output / 'model.obj'))
     checks = {'success': True, 'part_id': job['part_id'], 'vertices': vertices, 'faces': faces,
@@ -115,7 +93,7 @@ def main(job_file):
               'loose_edges': loose_edges, 'degenerate_faces': degenerate_faces,
               'self_intersections': 'not_checked',
               'bbox_min': mins, 'bbox_max': maxs, 'unit': 'm', 'up_axis': 'Z', 'front_axis': '-Y',
-              'visual_review': 'uncertain', 'visual_reason': 'Preview must be inspected by Codex'}
+              'visual_review': 'deferred_to_final_character'}
     save_json(output / 'checks.json', checks)
     save_json(output / 'intent.json', job['intent'])
 

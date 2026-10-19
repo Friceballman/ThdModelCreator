@@ -8,6 +8,7 @@ import subprocess
 import time
 
 from .storage import WorkflowError, find, fingerprint, no_links, read, record, sha, uid, write
+from .workflow import started_runs
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -64,6 +65,9 @@ def execute(workbench, project_id, plan_id, config):
             production = workbench.verify_production(doc, fixed['production_plan_id'])
             if production['content_hash'] != fixed['production_hash'] or fixed['stage'] not in production['fixed']['scope']['stages']:
                 raise WorkflowError('親計画の承認範囲が一致しません')
+            limit_key = {'assembly': 'max_assembly_runs', 'surface': 'max_surface_runs'}.get(fixed['stage'])
+            if limit_key and started_runs(doc, production['id'], fixed['stage']) >= production['fixed']['scope'][limit_key]:
+                raise WorkflowError('工程の実行試行上限に達しています')
             if fixed.get('reference_pack_id'):
                 pack = workbench.verify_pack(doc, fixed['reference_pack_id'])
                 if pack['content_hash'] != fixed['reference_pack_hash'] or pack['production_plan_id'] != production['id']:
@@ -150,7 +154,11 @@ def execute(workbench, project_id, plan_id, config):
                             composition=fixed['composition'], materials=fixed['materials'],
                             shape_confirmed=fixed['stage'] == 'surface', ue_verified=False,
                             production_plan_id=fixed.get('production_plan_id'),
-                            run_id=run_id, reference_pack_id=fixed.get('reference_pack_id'))
+                            run_id=run_id, reference_pack_id=fixed.get('reference_pack_id'),
+                            state_keywords=(list(dict.fromkeys(k for candidate in fixed['inputs']
+                                                            for k in candidate.get('state_keywords', [])))
+                                            if fixed['stage'] == 'assembly' else
+                                            list(parent.get('state_keywords', [])) if parent else []))
             doc['candidates'].append(result)
             plan.update(state='succeeded', candidates=[result['id']], metrics=metrics)
         except BaseException as exc:
@@ -184,6 +192,8 @@ def execute_authoring(workbench, project_id, plan_id, config):
             raise WorkflowError('承認した親計画・資料パックの版と一致しません')
         if fixed['adapter_config'] != config:
             raise WorkflowError('承認したBlender設定と実行設定が一致しません')
+        if started_runs(doc, production['id'], 'geometry', fixed['part_id']) >= production['fixed']['scope']['max_geometry_runs_per_part']:
+            raise WorkflowError('部品の造形実行試行上限に達しています')
         action = store.path(project_id, fixed['script'])
         adapter = REPO / 'scripts' / 'blender_authoring.py'
         if sha(action) != fixed['script_hash'] or sha(adapter) != fixed['adapter_hash']:
@@ -191,6 +201,11 @@ def execute_authoring(workbench, project_id, plan_id, config):
         folder = store.path(project_id, f'runs/{fixed["run_id"]}')
         if sha(folder / 'job.json') != fixed['job_hash'] or sha(folder / 'input-manifest.json') != fixed['input_manifest_hash']:
             raise WorkflowError('固定したBlender jobまたは入力一覧が変更されています')
+        if fixed.get('source_blend'):
+            source = find(doc['candidates'], fixed['source_candidate_id'])
+            if source.get('part_id') != fixed['part_id'] or fixed['source_blend'] not in source['files']:
+                raise WorkflowError('修正元の部品候補が計画と一致しません')
+            workbench.verify_file(project_id, fixed['source_blend'])
         if (not folder.is_dir() or read(folder / 'plan.json')['fixed'] != fixed or
                 read(folder / 'plan.json')['plan_hash'] != plan['plan_hash']):
             raise WorkflowError('予約済みrunの固定計画が一致しません')
@@ -214,8 +229,7 @@ def execute_authoring(workbench, project_id, plan_id, config):
             if checks.get('success') is not True or checks.get('part_id') != fixed['part_id'] or checks['faces'] > fixed['face_limit']['max_faces']:
                 raise WorkflowError('Blender造形の構造検査が不合格です')
             from .workflow import image_info
-            required = ['model.blend', 'model.obj', 'intent.json', 'checks.json',
-                        'previews/front.png', 'previews/side.png', 'previews/back.png', 'previews/oblique.png']
+            required = ['model.blend', 'model.obj', 'intent.json', 'checks.json']
             for name in required:
                 path = pending / name
                 if not path.is_file() or not path.stat().st_size:
@@ -223,19 +237,23 @@ def execute_authoring(workbench, project_id, plan_id, config):
                 if name.endswith('.png'):
                     image_info(path)
             candidate_id = uid()
-            manifest = {'candidate_id': candidate_id, 'parent_candidate_id': None,
+            manifest = {'candidate_id': candidate_id, 'parent_candidate_id': fixed.get('source_candidate_id'),
                         'plan_id': plan_id, 'run_id': fixed['run_id'],
+                        'state_keywords': fixed.get('state_keywords_after', []),
+                        'change_keywords': fixed.get('change_keywords', []),
                         'files': [{'file': name, 'sha256': sha(pending / name)} for name in required]}
             write(pending / 'manifest.json', manifest)
             pending.rename(folder / 'outputs')
             files = [{'file': f'runs/{fixed["run_id"]}/outputs/{name}',
                       'sha256': sha(folder / 'outputs' / name)} for name in required + ['manifest.json']]
             result = record(kind='part', part_id=fixed['part_id'], description=fixed['recipe']['intent'],
-                            parent_id=None, generation_id=plan_id, stage='geometry',
+                            parent_id=fixed.get('source_candidate_id'), generation_id=plan_id, stage='geometry',
                             provenance='blender_authoring', status='pending', history=[], files=files,
                             composition=[], materials=[], shape_confirmed=False, ue_verified=False,
                             production_plan_id=production['id'], reference_pack_id=pack['id'],
-                            run_id=fixed['run_id'], intent=fixed['recipe']['intent'], checks=checks)
+                            run_id=fixed['run_id'], intent=fixed['recipe']['intent'], checks=checks,
+                            state_keywords=fixed.get('state_keywords_after', []),
+                            change_keywords=fixed.get('change_keywords', []))
             result['id'] = candidate_id
             doc['candidates'].append(result)
             plan.update(state='succeeded', candidates=[candidate_id], metrics=metrics)

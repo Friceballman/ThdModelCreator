@@ -189,24 +189,25 @@ def main():
         center, size = Vector(scene['preview_center']), scene['preview_size']
     scene['preview_center'] = list(center)
     scene['preview_size'] = size
-    bpy.ops.object.camera_add()
-    camera = bpy.context.object
-    camera.data.type = 'ORTHO'
-    camera.data.ortho_scale = max(size * 1.7, 0.1)
-    scene.camera = camera
-    scene.render.engine = 'BLENDER_WORKBENCH'
-    scene.display.shading.color_type = 'MATERIAL'
-    scene.display.shading.light = 'STUDIO'
-    scene.display.shading.show_cavity = True
-    scene.render.resolution_x = scene.render.resolution_y = 384
-    scene.render.resolution_percentage = 100
-    scene.render.image_settings.file_format = 'PNG'
-    for view, direction in {'front': (0, -3, 0), 'side': (3, 0, 0), 'back': (0, 3, 0), 'perspective': (2, -3, 2)}.items():
-        camera.location = center + Vector(direction) * max(size, 0.1)
-        camera.rotation_euler = (center - camera.location).to_track_quat('-Z', 'Y').to_euler()
-        bpy.context.view_layer.update()
-        scene.render.filepath = str(output / f'{view}.png')
-        bpy.ops.render.render(write_still=True)
+    if job['stage'] == 'surface':
+        bpy.ops.object.camera_add()
+        camera = bpy.context.object
+        camera.data.type = 'ORTHO'
+        camera.data.ortho_scale = max(size * 1.7, 0.1)
+        scene.camera = camera
+        scene.render.engine = 'BLENDER_WORKBENCH'
+        scene.display.shading.color_type = 'MATERIAL'
+        scene.display.shading.light = 'STUDIO'
+        scene.display.shading.show_cavity = True
+        scene.render.resolution_x = scene.render.resolution_y = 384
+        scene.render.resolution_percentage = 100
+        scene.render.image_settings.file_format = 'PNG'
+        for view, direction in {'front': (0, -3, 0), 'side': (3, 0, 0), 'back': (0, 3, 0), 'perspective': (2, -3, 2)}.items():
+            camera.location = center + Vector(direction) * max(size, 0.1)
+            camera.rotation_euler = (center - camera.location).to_track_quat('-Z', 'Y').to_euler()
+            bpy.context.view_layer.update()
+            scene.render.filepath = str(output / f'{view}.png')
+            bpy.ops.render.render(write_still=True)
     bpy.ops.wm.save_as_mainfile(filepath=str(output / 'model.blend'))
     bpy.ops.wm.obj_export(filepath=str(output / 'model.obj'), forward_axis='NEGATIVE_Y', up_axis='Z',
                           export_materials=job['stage'] == 'surface')
@@ -215,7 +216,8 @@ def main():
     success = reloaded == after
     result = {'success': success, 'blender': bpy.app.version_string, 'parts': reloaded,
               'preserved': unchanged, 'blend_reload': success,
-              'preview': 'Workbench material-color preview; not a PBR lighting evaluation',
+              'preview': ('Workbench material-color preview; not a PBR lighting evaluation'
+                          if job['stage'] == 'surface' else 'deferred_to_final_character'),
               'ue_verified': False, 'uv_verified': False}
     (output / 'checks.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
     if not success:

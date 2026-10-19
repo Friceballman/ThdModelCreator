@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from model_workbench.storage import Store, WorkflowError, find, read, record, write
+from model_workbench.storage import Store, WorkflowError, find, read, record, sha, write
 from model_workbench.v2 import V2Workbench
 from model_workbench.runtime import load_config, REPO, execute
 from model_workbench.cli import parser, dispatch
@@ -80,9 +80,16 @@ class V2Tests(unittest.TestCase):
         self.assertEqual(plan['approval']['kind'], 'parent_scope')
         self.assertTrue(self.store.path(self.pid, plan['fixed']['script']).is_file())
         self.assertEqual(read(self.store.path(self.pid, plan['run'] + '/plan.json'))['plan_hash'], plan['plan_hash'])
+        second = self.wb.geometry_plan(self.pid, production['id'], pack['id'], self.part_id,
+                                       {'script': str(script), 'intent': '未実行なら計画可能'})
+        with self.store.update(self.pid, 'started_fixture') as doc:
+            find(doc['plans'], plan['id'])['state'] = 'failed'
+        with self.assertRaises(WorkflowError):
+            execute(self.wb, self.pid, second['id'], self.config)
+        self.assertEqual(find(self.store.load(self.pid)['plans'], second['id'])['state'], 'approved')
         with self.assertRaises(WorkflowError):
             self.wb.geometry_plan(self.pid, production['id'], pack['id'], self.part_id,
-                                  {'script': str(script), 'intent': '上限超過'})
+                                  {'script': str(script), 'intent': '開始済み上限超過'})
 
     def test_tampered_pack_or_script_stops_before_blender(self):
         production = self.production()
@@ -131,7 +138,7 @@ class V2Tests(unittest.TestCase):
             self.wb.geometry_plan(self.pid, production['id'], pack['id'], self.part_id,
                                   {'script': str(script), 'intent': '試験'})
 
-    def test_v2_shape_gate_requires_codex_review(self):
+    def test_v2_shape_gate_uses_structural_check_not_visual_review(self):
         production = self.production()
         candidate = record(kind='character', status='pending', production_plan_id=production['id'],
                            files=[{'file': self.ref['file'], 'sha256': self.ref['sha256']}],
@@ -140,11 +147,30 @@ class V2Tests(unittest.TestCase):
             doc['candidates'].append(candidate)
         with self.assertRaises(WorkflowError):
             self.wb.candidate_state(self.pid, candidate['id'], 'confirm-shape', '未評価')
-        self.wb.review(self.pid, candidate['id'], [{
-            'requirement_id': self.req['id'], 'result': 'uncertain', 'reason': '画像未確認',
-            'impact': '見た目の確証なし', 'directions': ['front'],
-            'image_files': [self.ref['file']]}], '自己点検', actor='codex')
+        checks = self.store.path(self.pid, 'runs/test-gate/outputs/checks.json')
+        checks.parent.mkdir(parents=True)
+        write(checks, {'success': True})
+        with self.store.update(self.pid, 'fixture_checks') as doc:
+            find(doc['candidates'], candidate['id'])['files'].append({
+                'file': 'runs/test-gate/outputs/checks.json', 'sha256': sha(checks)})
         self.assertTrue(self.wb.candidate_state(self.pid, candidate['id'], 'confirm-shape', '仮固定')['shape_confirmed'])
+
+    def test_keywords_are_searchable_and_revision_is_traceable(self):
+        item = record(kind='part', status='pending', part_id=self.part_id, files=[],
+                      state_keywords=['角ばった'], history=[])
+        with self.store.update(self.pid, 'fixture') as doc:
+            doc['candidates'].append(item)
+        self.assertEqual(self.wb.candidate_keywords(self.pid, item['id'],
+                         ['角ばった', '低ポリゴン'], '状態を整理')['state_keywords'],
+                         ['角ばった', '低ポリゴン'])
+        def call(*arguments):
+            return dispatch(parser().parse_args(['--root', str(self.store.root), *arguments]))
+        self.assertEqual([c['id'] for c in call('candidate', 'list', self.pid, '--keyword', '低ポリゴン')],
+                         [item['id']])
+        self.assertEqual(call('candidate', 'keywords', self.pid, item['id'], '--keyword', '修正待ち',
+                              '--reason', '試験で状態更新')['state_keywords'], ['修正待ち'])
+        with self.assertRaises(WorkflowError):
+            self.wb.candidate_keywords(self.pid, item['id'], ['重複', '重複'], '誤入力')
 
 
 if __name__ == '__main__':

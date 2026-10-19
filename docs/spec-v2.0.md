@@ -30,7 +30,7 @@
 
 親計画は `production_plans[]` に保持する。必須の固定内容は `project_id`、`part_plan_id` とその内容hash、使用する参照ID・版・ファイルhash、要件ID・版、`scope`、`deliverables`、`approval`。`scope` には対象部品ID、許す工程（image_prepare / geometry / assembly / surface / inspect / source_export）、造形方式 `blender_authoring`、対象外、保持条件を入れる。既存OBJの取り込みは入力資料であり、造形エンジンではない。
 
-試行上限は `max_reference_drafts_per_part`、`max_geometry_runs_per_part`、`max_assembly_runs`、`max_surface_runs` の正整数で指定する。開始した実行は失敗でも一回と数え、検証前に拒否した計画は数えない。`result_unknown` は調査が終わるまで枠を予約したままにする。部品ごとに `target_faces` と `max_faces`、見た目の判定観点、許す処理時間の目安を記す。共通の固定面数や品質点数は設けない。Codexが案件の用途と部品の見え方から値を提案し、ユーザーが親計画で確認する。
+試行上限は `max_reference_drafts_per_part`、`max_geometry_runs_per_part`、`max_assembly_runs`、`max_surface_runs` の正整数で指定する。計画の作成・承認・取消は消費せず、実行が `running` に遷移したときだけ一回消費する。`succeeded / failed / result_unknown` も消費済みとして数え、実行前に拒否された計画は数えない。実行開始直前に上限を再検査する。`result_unknown` は調査が終わるまで枠を保持する。部品ごとに `target_faces` と `max_faces`、見た目の判定観点、許す処理時間の目安を記す。共通の固定面数や品質点数は設けない。Codexが案件の用途と部品の見え方から値を提案し、ユーザーが親計画で確認する。
 
 `production plan --file` の入力は次の形とし、ID・版・hashはCLIが登録時に確定する。以下の数値は形式例であり、案件の合格値ではない。
 
@@ -81,31 +81,33 @@ Codexは必要な画像準備を実施し、外部画像生成ツールを使っ
 
 Codexは資料パックから輪郭、特徴点、比率、厚み、接続位置、見せる方向を抽出し、最少の部品・面で仮形状を作る。プリミティブ、回転体、押し出し、カーブ、手作成メッシュ、既存の利用可能な身体ベースのどれを使うかを子計画のレシピへ明記する。身体・腕・脚は変形と見た目を考慮して連続形状を基本とし、面数だけを理由に細分化しない。帽子・装備等は独立オブジェクトにできる。
 
-Blender Pythonによる一回の実行には `runs/<run-id>/action.py` と `job.json` を置き、実行したBlenderの版、引数、入力、パラメータ、スクリプトhash、ログを保存する。新しい子計画の作成時にrun IDとフォルダを予約してスクリプト・固定計画を置くが、この時点ではBlenderを起動しない。取消した計画のrunも証跡として残す。既存 `blender_workbench.py` は仮組み・材質の機能を維持し、造形は専用アダプタから固定済み `action.py` を実行する。実行は明示パスのBlenderをbackgroundで呼び、`--factory-startup --disable-autoexec --python-exit-code 1` を使う。スクリプトの計画時hashと実行直前hashが一致しなければ停止する。画像またはモデルの既存候補を直接開いて保存しない。
+Blender Pythonによる一回の実行には `runs/<run-id>/action.py` と `job.json` を置き、実行したBlenderの版、引数、入力、パラメータ、スクリプトhash、ログを保存する。新しい子計画の作成時にrun IDとフォルダを予約してスクリプト・固定計画を置くが、この時点ではBlenderを起動しない。取消した計画のrunも証跡として残す。既存 `blender_workbench.py` は仮組み・材質の機能を維持し、造形は専用アダプタから固定済み `action.py` を実行する。実行は明示パスのBlenderをbackgroundで呼び、`--factory-startup --disable-autoexec --python-exit-code 1` を使う。スクリプトの計画時hashと実行直前hashが一致しなければ停止する。修正時は既存候補を読み込み可能だが、元ファイルを上書きせず新しいrunに別名保存する。
 
-各試行で正面・側面・背面・斜めを同じ座標と縮尺でレンダーし、パックの資料と比較する。輪郭・特徴点・ポーズ・接続・背面の推定を項目別に記録する。面数削減で必要な輪郭を失う場合は面を残す。`target_faces` は努力目標、`max_faces` は超過時に候補登録を止める上限。候補には編集可能な `.blend`、交換用OBJ、4方向画像、intent、checksを登録する。見た目はCodexが画像を実際に確認して評価し、見られなければ `uncertain` にする。
+各造形試行では資料パックの寸法・方向・推定を参照し、構造と面数を検査する。面数削減で必要な輪郭を失う場合は面を残す。`target_faces` は努力目標、`max_faces` は超過時に候補登録を止める上限。部品候補には編集可能な `.blend`、交換用OBJ、intent、checksを登録し、部品単体の確認画像は標準生成しない。最終の材質適用済み全身候補で正面・側面・背面・斜めの4方向をレンダーし、見た目をCodexが実際に確認して評価する。見られなければ `uncertain` とする。必要な場合に限り `inspect` で追加レンダーを明示実行できる。
 
 構造検査は少なくとも、空でないメッシュ、有限値、面インデックス、部品ID、軸・単位、境界箱、面数、欠損・重複の診断を行う。非多様体辺、穴、自己交差は用途に応じて評価し、`watertight=False` だけで不合格としない。陰影のスムーズ化と頂点位置を変える形状平滑化は別の操作名・レシピ・候補として記録する。
 
 ## 8. 仮組み・手動修正・材質
 
-仮組みは承認された部品候補を部品IDごとに一度だけ割り当て、位置・回転・スケール、接続先とアンカーを固定する。全身は別オブジェクトを保持し、配置と表面接合を混同しない。仮組み子計画は4方向画像、部品間の隙間・めり込み・頭身・保持条件を検査し、新しいcharacter候補を作る。親計画内の反復ならCodexが配置を調整できる。
+仮組みは承認された部品候補を部品IDごとに一度だけ割り当て、位置・回転・スケール、接続先とアンカーを固定する。全身は別オブジェクトを保持し、配置と表面接合を混同しない。仮組み子計画は部品ID・構成・非空メッシュ・保存後再読込・保持条件を機械検査し、新しいcharacter候補を作る。通常はここで見た目確認用画像を生成しない。親計画内の反復ならCodexが配置を調整できる。
 
 ユーザーがBlenderで配置を手修正した場合は、作業ファイルを新しいrunへコピーして取り込む。対象の親全身候補ID、変更対象部品、変更前後の変換、変更者、理由を必須とする。各オブジェクトの部品IDを照合し、申告していない部品の形状・材質・変換が変わった場合は停止する。手修正で元の登録済み `.blend` が上書きされた場合はhash不一致を報告し、元候補が不変だったと扱わない。正常に取り込めたときだけ派生character候補として登録する。
 
 部品単体の手修正 `.blend` も同じ取込経路を使い、親part候補と対象部品IDを指定して派生part候補にする。手修正は対応する造形または仮組みの試行枠を一回消費する。材質だけの手修正はsurfaceの試行枠に数える。どの種類か判定できないファイルは自動登録しない。
 
-形状確定はユーザーの最終採用ではなく、材質工程へ進む内部の形状版の固定。Codexは仮組みを自己点検し、問題を記録した上で `shape_confirmed` を設定する。未解決の必須形状要件が `fail` なら材質工程へ進めず、`uncertain` は根拠と影響を記録する。既存のユーザー手動確認がある場合もその結果を別レビューとして残す。
+形状確定はユーザーの最終採用ではなく、材質工程へ進む内部の形状版の固定。仮組み候補の `checks.json` に `success=true` が記録され、ファイルhashが一致する場合に `shape_confirmed` を設定できる。これは構造ゲートであり、見た目の合格を意味しない。要件別の見た目自己点検とユーザーレビューは通常、材質適用後の全身候補について記録する。
 
 材質レコードは `material_id / part_id / source_shape_candidate_id / name / intent / reference_regions / shader / zones / provenance` を持つ。標準はPrincipled BSDFの色・roughness・metallicと、必要な場合のプロシージャル模様・微細凹凸。複数色の帯などは一部品内の材質領域として扱える。領域の生成方法と推定はintentへ記録する。画像テクスチャ・UV・ベイクを使う場合は親計画と子計画へ明記する。異なる形状版への材質の誤適用を拒否する。Workbenchの色表示だけで最終質感を合格にせず、材質確認画像と設定値を照合する。.blendが編集原本であり、OBJ/MTLがノード材質を完全再現するとは扱わない。
 
 ## 9. 候補、レビュー、修正、出力
 
+候補の `state_keywords` は状態を短い語句の配列として保持し、`candidate list --keyword` で絞り込み、`candidate keywords --keyword ... --reason` で履歴付き更新を行う。各語句は1〜64文字、最大32個、重複・制御文字は不可。前候補の造形修正は `generate plan --source <candidate-id>` と `change_keywords` を使い、同じ親計画・資料パック・部品の候補だけを修正元にできる。元の `.blend` を読み込んで新しいrunへ別名保存し、親候補ID、修正前後の状態語句、変更語句を記録する。旧候補および下流候補は自動で上書き・置換しない。造形スクリプトはユーザー権限で動く信頼済みのローカルコードのみ指定する。hash検査は改変検知であり、OS権限の隔離ではない。
+
 候補種別 `prepared_image / part / character`、状態 `pending / selected / on_hold / rejected`、親候補ID、plan ID、run IDを維持する。部品候補と全身候補のファイルは案件ルート相対パスとhashで追跡する。`inspect` は元候補を上書きせず、新しいrunのプレビュー・checksを候補の `inspection_run_ids` に追加する。Codexの自己点検とユーザーのレビューは別記録にし、要件ごとに `pass / fail / uncertain / not_applicable`、理由、確認方向、画像IDを保存する。自動検査の合格を審美的な合格やユーザーの承認に読み替えない。
 
 完成候補の提示では、全身4方向画像と `.blend`、部品構成版、資料パックID、部品候補ID、組み立ての変換、材質IDと狙い、要件別の自己点検、未確認事項を一覧できる。ユーザーの「帽子の背面を修正」「帯の色のみ変更」などは、対象工程へ戻る新子計画または新親計画になる。変更した資料パック・部品・材質から影響する下流候補を再点検し、旧候補を上書きしない。
 
-`candidate select` と `project set-approved` は別操作とし、正式採用はレビュー済み・selectedの全身候補を最大1件。通常の `project export --name` はselectedのcharacter全件だけを対象にし、画像・part候補を混ぜない。出力ごとに新しいexport IDを作り、`.blend`、OBJ/MTL（表現可能な範囲）、プレビュー、checks、composition、依存ファイル、出所とhashを含むmanifestを同梱する。未確認のUE・リグ・動作はmanifestに明記する。
+`candidate select` と `project set-approved` は別操作とし、ver2の正式採用は材質適用済み・親計画の全要件に対するユーザー最終レビュー済み・selectedの全身候補を最大1件。通常の `project export --name` はselectedのcharacter全件だけを対象にし、画像・part候補を混ぜない。出力ごとに新しいexport IDを作り、`.blend`、OBJ/MTL（表現可能な範囲）、プレビュー、checks、composition、依存ファイル、材質の個別レシピ、出所とhashを含むmanifestを同梱する。未確認のUE・リグ・動作はmanifestに明記する。
 
 ## 10. CLIの追加・互換
 

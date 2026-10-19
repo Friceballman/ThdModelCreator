@@ -166,15 +166,16 @@ def main(job_path):
             after = snapshot()
     else:
         after, changed, updates = before, [], {}
-    render(output)
+    if job.get('render_previews', True):
+        render(output)
     bpy.ops.wm.save_as_mainfile(filepath=str(output / 'model.blend'))
     bpy.ops.wm.obj_export(filepath=str(output / 'model.obj'))
     write(output / 'checks.json', {'success': True, 'mode': job['mode'],
                                    'blender_version': bpy.app.version_string,
                                    'changed_part_ids': changed, 'before': before, 'after': after,
                                    'composition_updates': updates,
-                                   'visual_review': 'uncertain',
-                                   'visual_reason': 'Previews must be inspected by Codex'})
+                                   'visual_review': 'uncertain' if job.get('render_previews', True) else
+                                                    'deferred_to_final_character'})
 
 
 if __name__ == '__main__':

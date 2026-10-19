@@ -6,11 +6,20 @@ from pathlib import Path
 import re
 import shutil
 
-from .storage import WorkflowError, find, fingerprint, no_links, record, sha, uid, write
+from .storage import WorkflowError, find, fingerprint, no_links, read, record, sha, uid, write
 
 ROLES = ('pose', 'silhouette', 'design', 'face', 'color', 'orthographic', 'part', 'style', 'other')
 VIEWS = ('front', 'side_left', 'side_right', 'back', 'perspective', 'multiple', 'unknown')
 STAGES = ('image_prepare', 'geometry', 'assembly', 'surface')
+STARTED_STATES = frozenset(('running', 'succeeded', 'failed', 'result_unknown'))
+
+
+def started_runs(doc, production_id, stage, part_id=None):
+    return sum(plan.get('production_plan_id') == production_id
+               and plan.get('fixed', {}).get('stage') == stage
+               and plan['state'] in STARTED_STATES
+               and (part_id is None or plan.get('part_id') == part_id)
+               for plan in doc['plans'])
 
 
 def image_info(path):
@@ -361,16 +370,9 @@ class Workbench:
                 if item['kind'] != 'character':
                     raise WorkflowError('形状確定は全身候補が対象です')
                 if item.get('production_plan_id'):
-                    reviews = [r for r in doc['reviews'] if r['candidate_id'] == candidate_id and r.get('actor') == 'codex']
-                    if not reviews:
-                        raise WorkflowError('ver2の形状確定にはCodexの要件別自己点検が必要です')
-                    latest = reviews[-1]
-                    active = {r['id'] for r in doc['requirements'] if r['active'] and r['category'] in ('must_keep', 'must_change')}
-                    assessed = {entry['requirement_id']: entry for entry in latest['entries']}
-                    if not active <= set(assessed):
-                        raise WorkflowError('必須形状要件の自己点検が不足しています')
-                    if any(assessed[rid]['result'] == 'fail' for rid in active):
-                        raise WorkflowError('未解決の必須形状要件が不合格です')
+                    checks_file = next((f for f in item['files'] if f['file'].endswith('/checks.json')), None)
+                    if not checks_file or read(self.verify_file(project_id, checks_file)).get('success') is not True:
+                        raise WorkflowError('形状確定には仮組みの構造検査成功が必要です')
                 item['shape_confirmed'] = True
             else:
                 item['status'] = {'select': 'selected', 'hold': 'on_hold', 'reject': 'rejected'}[action]
@@ -407,8 +409,20 @@ class Workbench:
             candidate = find(doc['candidates'], candidate_id)
             if candidate['kind'] != 'character' or candidate['status'] != 'selected':
                 raise WorkflowError('正式採用は選択済み全身候補が対象です')
-            if not any(r['candidate_id'] == candidate_id for r in doc['reviews']):
-                raise WorkflowError('正式採用の前にレビューを保存してください')
+            if candidate.get('production_plan_id') and candidate.get('stage') != 'surface':
+                raise WorkflowError('正式採用は材質適用後の全身候補が対象です')
+            required_actor = 'user' if candidate.get('production_plan_id') else None
+            reviews = [r for r in doc['reviews'] if r['candidate_id'] == candidate_id and
+                       (required_actor is None or r.get('actor') == required_actor)]
+            if not reviews:
+                raise WorkflowError('正式採用の前にユーザーの最終レビューを保存してください' if required_actor else
+                                    '正式採用の前にレビューを保存してください')
+            if required_actor:
+                production = find(doc['production_plans'], candidate['production_plan_id'])
+                required = {item['id'] for item in production['fixed']['requirements']}
+                reviewed = {entry['requirement_id'] for entry in reviews[-1]['entries']}
+                if not required <= reviewed:
+                    raise WorkflowError('正式採用には親計画の全要件に対する最終レビューが必要です')
             require_text(reason)
             doc['approved_candidate_id'] = candidate_id
         return {'approved_candidate_id': candidate_id}
@@ -477,6 +491,18 @@ class Workbench:
                             if sha(target) != dependency['sha256']:
                                 raise WorkflowError('資料パック依存ファイルのhashが一致しません')
                             dependency_records.append({'reference_pack_id': pack['id'],
+                                                       'file': target.relative_to(temporary).as_posix(),
+                                                       'sha256': dependency['sha256']})
+                    for material_snapshot in candidate.get('materials', []):
+                        material = find(doc['materials'], material_snapshot['id'])
+                        for dependency in material.get('files', []):
+                            source = self.verify_file(project_id, dependency)
+                            target = folder / 'dependencies' / 'materials' / material['id'] / source.name
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copyfile(source, target)
+                            if sha(target) != dependency['sha256']:
+                                raise WorkflowError('材質定義の出力hashが一致しません')
+                            dependency_records.append({'material_id': material['id'],
                                                        'file': target.relative_to(temporary).as_posix(),
                                                        'sha256': dependency['sha256']})
                     lineage = {'candidate_id': candidate['id'],
