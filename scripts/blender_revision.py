@@ -138,16 +138,50 @@ def render(output):
         bpy.ops.render.render(write_still=True)
     bpy.data.objects.remove(camera, do_unlink=True)
 
+def validate_static_scene():
+    # The diff contract only covers static mesh data and explicit transforms.
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'MESH' and (obj.modifiers or obj.constraints or obj.parent or obj.data.shape_keys):
+            raise ValueError('未適用modifier・constraint・親子変形・shape keyは静止編集検査の対象外です')
+
+
+def extract_parts(output, changed, composition):
+    for part_id in changed:
+        bpy.ops.wm.open_mainfile(filepath=str(output / 'model.blend'), use_scripts=False)
+        bpy.context.view_layer.update()
+        binding = next(b for b in composition if b['part_id'] == part_id)
+        placement = (Matrix.Translation(Vector(binding['location'])) @
+                     Euler([math.radians(x) for x in binding['rotation_degrees']]).to_matrix().to_4x4() @
+                     Matrix.Diagonal((*binding['scale'], 1)))
+        local = placement.inverted()
+        for obj in list(bpy.context.scene.objects):
+            if obj.type == 'MESH' and (obj.get('part_id') or obj.get('mwb_part_id')) == part_id:
+                obj.matrix_world = local @ obj.matrix_world
+            else:
+                bpy.data.objects.remove(obj, do_unlink=True)
+        destination = output / 'parts' / part_id
+        destination.mkdir(parents=True)
+        bpy.context.view_layer.update()
+        bpy.ops.wm.save_as_mainfile(filepath=str(destination / 'model.blend'))
+
 
 def main(job_path):
     job = json.loads(Path(job_path).read_text(encoding='utf-8'))
     output = Path(job['output'])
     output.mkdir(parents=True, exist_ok=False)
     bpy.ops.wm.open_mainfile(filepath=job['source'], use_scripts=False)
+    validate_static_scene()
+    bpy.context.view_layer.update()
     before = snapshot()
     before_world = world_matrices()
     if job['mode'] == 'manual_import':
         bpy.ops.wm.open_mainfile(filepath=job['incoming'], use_scripts=False)
+        if job['edit'].get('session_id'):
+            if (bpy.context.scene.get('mwb_session_id') != job['edit']['session_id'] or
+                    bpy.context.scene.get('mwb_source_candidate_id') != job['edit'].get('session_source_id')):
+                raise ValueError('編集ファイル内のセッションID・元候補IDが一致しません')
+        validate_static_scene()
+        bpy.context.view_layer.update()
         after = snapshot()
         after_world = world_matrices()
         changed = compare(before, after, job['edit'])
@@ -166,13 +200,20 @@ def main(job_path):
             after = snapshot()
     else:
         after, changed, updates = before, [], {}
+    for part_id, limit in job.get('face_limits', {}).items():
+        if part_id in after and sum(o['faces'] for o in after[part_id]['objects']) > limit['max_faces']:
+            raise ValueError('手修正で部品の面数上限を超えました: ' + part_id)
+    extracted = changed if job.get('extract_parts') else []
     if job.get('render_previews', True):
         render(output)
     bpy.ops.wm.save_as_mainfile(filepath=str(output / 'model.blend'))
     bpy.ops.wm.obj_export(filepath=str(output / 'model.obj'))
+    if extracted:
+        extract_parts(output, extracted, job['composition'])
     write(output / 'checks.json', {'success': True, 'mode': job['mode'],
                                    'blender_version': bpy.app.version_string,
                                    'changed_part_ids': changed, 'before': before, 'after': after,
+                                   'extracted_part_ids': extracted,
                                    'composition_updates': updates,
                                    'visual_review': 'uncertain' if job.get('render_previews', True) else
                                                     'deferred_to_final_character'})

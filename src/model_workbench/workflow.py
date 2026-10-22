@@ -18,7 +18,8 @@ def started_runs(doc, production_id, stage, part_id=None):
     return sum(plan.get('production_plan_id') == production_id
                and plan.get('fixed', {}).get('stage') == stage
                and plan['state'] in STARTED_STATES
-               and (part_id is None or plan.get('part_id') == part_id)
+               and (part_id is None or plan.get('part_id') == part_id or
+                    part_id in (plan.get('fixed', {}).get('edit') or {}).get('target_part_ids', []))
                for plan in doc['plans'])
 
 

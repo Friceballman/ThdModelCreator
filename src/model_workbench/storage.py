@@ -106,9 +106,10 @@ class Store:
                            'candidates', 'materials', 'reviews', 'exports', 'events'):
             if not isinstance(doc.get(collection), list):
                 raise WorkflowError(f'案件データが破損しています: {collection}')
-        if doc.get('workflow_version', 1) not in (1, 2):
+        if doc.get('workflow_version', 1) not in (1, 2, 3):
             raise WorkflowError('未知の制作ワークフロー版です')
-        for collection in ('production_plans', 'reference_packs'):
+        for collection in ('production_plans', 'reference_packs', 'quality_issues',
+                           'edit_sessions', 'completion_history', 'comparisons'):
             if not isinstance(doc.get(collection, []), list):
                 raise WorkflowError(f'案件データが破損しています: {collection}')
         return doc
@@ -120,11 +121,13 @@ class Store:
         write(directory / 'recovery' / (uid() + '.json'), doc)
         write(directory / 'project.json', doc)
 
-    def create(self, name, goal):
+    def create(self, name, goal, workflow_version=2):
         if not name.strip() or not goal.strip():
             raise WorkflowError('案件名と目的は空にできません')
         self.root.mkdir(parents=True, exist_ok=True)
-        doc = record(schema_version=1, workflow_version=2, name=name, goal=goal, state='active',
+        if workflow_version not in (2, 3):
+            raise WorkflowError('新規案件のworkflow_versionは2または3です')
+        doc = record(schema_version=1, workflow_version=workflow_version, name=name, goal=goal, state='active',
                      approved_candidate_id=None, references=[], requirements=[],
                      part_plans=[], plans=[], candidates=[], materials=[],
                      reviews=[], exports=[], events=[], notes=[],

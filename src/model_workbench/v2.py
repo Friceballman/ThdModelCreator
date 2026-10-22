@@ -10,7 +10,7 @@ import math
 import subprocess
 import unicodedata
 
-from .storage import WorkflowError, find, fingerprint, no_links, read, record, sha, uid, write
+from .storage import WorkflowError, find, fingerprint, no_links, now, read, record, sha, uid, write
 from .workflow import Workbench, image_info, require_text, started_runs
 
 REPO = Path(__file__).resolve().parents[2]
@@ -165,6 +165,7 @@ class V2Workbench(Workbench):
             external = None
         failure = None
         outcome = None
+        explicit_edit_authorization = None
         with self.store.update(project_id, 'candidate_' + mode) as doc:
             production = self.verify_production(doc, production_id)
             source = find(doc['candidates'], source_id)
@@ -183,19 +184,32 @@ class V2Workbench(Workbench):
             else:
                 stage = {'part_shape': 'geometry', 'part_transform': 'assembly',
                          'material_parameters': 'surface'}[edit['mode']]
-                if stage not in production['fixed']['scope']['stages'] or edit['mode'] not in production['fixed']['scope'].get('allowed_edits', []):
+                if stage not in production['fixed']['scope']['stages']:
                     raise WorkflowError('手修正が親計画の範囲外です')
+                if edit['mode'] not in production['fixed']['scope'].get('allowed_edits', []):
+                    # A later user request can authorize this exact revision without
+                    # changing the already approved, hashed parent scope.
+                    authorization = edit.get('user_authorization')
+                    if (not isinstance(authorization, dict) or authorization.get('actor') != 'user'
+                            or authorization.get('source_candidate_id') != source_id
+                            or authorization.get('mode') != edit['mode']
+                            or not isinstance(authorization.get('target_part_ids'), list)
+                            or set(authorization['target_part_ids']) != set(edit['target_part_ids'])):
+                        raise WorkflowError('手修正が親計画の範囲外です。対象候補・種類・部品に一致する利用者の追加承認が必要です')
+                    require_text(authorization.get('evidence'))
+                    explicit_edit_authorization = copy.deepcopy(authorization)
                 expected_parts = {source['part_id']} if source['kind'] == 'part' else {b['part_id'] for b in source['composition']}
                 if not edit['target_part_ids'] or not set(edit['target_part_ids']) <= expected_parts:
                     raise WorkflowError('変更対象部品が候補構成にありません')
                 if source['kind'] == 'part' and edit['mode'] != 'part_shape':
                     raise WorkflowError('部品単体の手修正は形状変更として登録します')
-                if source['kind'] == 'character' and edit['mode'] == 'part_shape':
+                if (source['kind'] == 'character' and edit['mode'] == 'part_shape'
+                        and production['fixed']['scope'].get('quality_loop_version', 2) < 3):
                     raise WorkflowError('全身.blendの形状変更は部品候補で取り込んでください')
                 scope = production['fixed']['scope']
                 limit = (scope['max_geometry_runs_per_part'] if stage == 'geometry' else
                          scope['max_assembly_runs'] if stage == 'assembly' else scope['max_surface_runs'])
-                consumed = (sum(started_runs(doc, production_id, stage, part_id)
+                consumed = (max(started_runs(doc, production_id, stage, part_id)
                                 for part_id in edit['target_part_ids']) if stage == 'geometry' else
                             started_runs(doc, production_id, stage))
                 if consumed >= limit:
@@ -222,6 +236,10 @@ class V2Workbench(Workbench):
                                                              production_plan_id=production_id,
                                                              production_hash=production['content_hash']),
                           candidates=[], error=None, run=f'runs/{run_id}')
+            if explicit_edit_authorization is not None:
+                plan['approval'].update(kind='explicit_user_edit',
+                    user_authorization=explicit_edit_authorization,
+                    authorization_hash=fingerprint(explicit_edit_authorization))
             doc['plans'].append(plan)
             write(folder / 'plan.json', plan)
             lock = REPO / 'experiments/runs/.execution.lock'
@@ -236,12 +254,17 @@ class V2Workbench(Workbench):
                 plan['state'] = 'running'
                 self.store.save(doc)
                 pending = folder / 'outputs.pending'
+                embedded_materials = bool(edit and edit['mode'] == 'material_parameters'
+                                          and edit.get('material_storage') == 'embedded_blend')
                 material_ids = ({part_id: uid() for part_id in edit['target_part_ids']}
-                                if edit and edit['mode'] == 'material_parameters' else {})
+                                if edit and edit['mode'] == 'material_parameters' and not embedded_materials else {})
                 job = {'mode': mode, 'source': str(original), 'output': str(pending),
                        'edit': edit, 'incoming': str(folder / 'input.blend') if external else None,
                        'material_ids': material_ids,
                        'composition': source.get('composition', []),
+                       'extract_parts': source['kind'] == 'character' and bool(edit)
+                                        and (edit['mode'] == 'part_shape' or embedded_materials),
+                       'face_limits': production['fixed']['scope']['face_limits'],
                        'render_previews': source['kind'] == 'character' and
                        (edit is None or source.get('stage') == 'surface')}
                 command = [self.adapter_config['blender'], '--background', '--factory-startup',
@@ -258,6 +281,8 @@ class V2Workbench(Workbench):
                 if job['render_previews']:
                     required += ['previews/front.png', 'previews/side.png',
                                  'previews/back.png', 'previews/oblique.png']
+                extracted_names = [f'parts/{pid}/model.blend' for pid in checks.get('extracted_part_ids', [])]
+                required += extracted_names
                 for name in required:
                     path = pending / name
                     if not path.is_file() or not path.stat().st_size:
@@ -272,6 +297,29 @@ class V2Workbench(Workbench):
                     for binding in composition:
                         binding.update(checks.get('composition_updates', {}).get(binding['part_id'], {}))
                     material_snapshots = copy.deepcopy(source.get('materials', []))
+                    if job['extract_parts']:
+                        for part_id in checks['extracted_part_ids']:
+                            binding = next(b for b in composition if b['part_id'] == part_id)
+                            parent_part = find(doc['candidates'], binding['candidate_id'])
+                            part_file = f'runs/{run_id}/outputs/parts/{part_id}/model.blend'
+                            revised_part = record(
+                                project_id=project_id, kind='part', part_id=part_id,
+                                description=edit['reason'], parent_id=parent_part['id'],
+                                generation_id=plan['id'], stage='geometry', provenance='manual_blend',
+                                status='pending', history=[], composition=[], materials=[],
+                                shape_confirmed=False, ue_verified=False, production_plan_id=production_id,
+                                reference_pack_id=source.get('reference_pack_id'), run_id=run_id,
+                                files=[f for f in files if f['file'] == part_file],
+                                state_keywords=parent_part.get('state_keywords', []),
+                                change_keywords=edit.get('change_keywords', []))
+                            if embedded_materials:
+                                revised_part['embedded_materials'] = copy.deepcopy(checks['after'][part_id]['objects'])
+                            doc['candidates'].append(revised_part)
+                            binding['candidate_id'] = revised_part['id']
+                        # Replaced parts carry the exact face assignments in their
+                        # .blend; preserve the recipes for untouched parts.
+                        replaced = set(checks['extracted_part_ids'])
+                        material_snapshots = [m for m in material_snapshots if m['part_id'] not in replaced]
                     if material_ids:
                         material_snapshots = [m for m in material_snapshots if m['part_id'] not in material_ids]
                         bindings = {b['part_id']: b['candidate_id'] for b in source['composition']}
@@ -319,7 +367,8 @@ class V2Workbench(Workbench):
                     candidate = record(project_id=project_id, kind=source['kind'], part_id=source.get('part_id'),
                                        description=edit['reason'], parent_id=source_id,
                                        generation_id=plan['id'], stage=stage, provenance='manual_blend',
-                                       status='pending', history=[], files=files,
+                                       status='pending', history=[], files=[
+                                           f for f in files if '/outputs/parts/' not in f['file']],
                                        composition=composition,
                                        materials=material_snapshots,
                                        shape_confirmed=False if stage != 'surface' else source.get('shape_confirmed', False),
@@ -330,7 +379,7 @@ class V2Workbench(Workbench):
                                                                         source.get('state_keywords', []))),
                                        change_keywords=state_keywords(edit.get('change_keywords', [])))
                     doc['candidates'].append(candidate)
-                    plan['candidates'] = [candidate['id']]
+                    plan['candidates'] = [c['id'] for c in doc['candidates'] if c.get('generation_id') == plan['id']]
                     outcome = candidate
                 else:
                     source.setdefault('inspection_run_ids', []).append(run_id)
@@ -433,6 +482,10 @@ class V2Workbench(Workbench):
             if any(not r['active'] for r in reqs):
                 raise WorkflowError('廃止済み要件は親計画に含められません')
             scope = copy.deepcopy(manifest['scope'])
+            quality_loop_version = manifest.get('quality_loop_version', doc.get('workflow_version', 2))
+            if quality_loop_version not in (2, 3):
+                raise WorkflowError('quality_loop_versionは2または3です')
+            scope['quality_loop_version'] = quality_loop_version
             part_ids = {p['id'] for p in structure['parts']}
             if not scope.get('part_ids') or set(scope['part_ids']) != part_ids or len(scope['part_ids']) != len(part_ids):
                 raise WorkflowError('親計画は承認対象の全ての部品を一度ずつ含めます')
@@ -511,6 +564,7 @@ class V2Workbench(Workbench):
         with self.store.update(project_id, 'reference_pack_created') as doc:
             production = self.verify_production(doc, production_id)
             part_ids = set(production['fixed']['scope']['part_ids'])
+            v3 = production['fixed']['scope'].get('quality_loop_version', 2) >= 3
             ref_ids = {r['id'] for r in production['fixed']['references']}
             if len(manifest['parts']) != len(part_ids) or {p.get('part_id') for p in manifest['parts']} != part_ids:
                 raise WorkflowError('資料パックには親計画の全部品が必要です')
@@ -527,6 +581,12 @@ class V2Workbench(Workbench):
                 images = part.get('images', [])
                 if not images and not part.get('construction'):
                     raise WorkflowError('方向別画像または寸法付き構築図が必要です')
+                if v3:
+                    views = {image.get('view') for image in images}
+                    if not {'front', 'side', 'top'} <= views:
+                        raise WorkflowError(f'v3資料パックには正面・側面・上面画像が必要です: {part_id}')
+                    if not any(image.get('view') == 'back' for image in images):
+                        part.setdefault('uncertainties', []).append('背面図なし: 背面形状は未確定として扱う')
                 for image in images:
                     if image.get('method') not in METHODS or 'inferred' not in image or 'uncertainties' not in image:
                         raise WorkflowError('画像の方法・推定・不確実性が必要です')
@@ -549,6 +609,30 @@ class V2Workbench(Workbench):
                     image.update(file=relative, sha256=digest)
                     files.append({'file': relative, 'sha256': digest})
                 normalized.append(part)
+            assembly_concept = copy.deepcopy(manifest.get('assembly_concept'))
+            if v3:
+                if not isinstance(assembly_concept, dict) or not assembly_concept.get('file'):
+                    raise WorkflowError('v3資料パックには全身組立前のassembly_concept画像が必要です')
+                if not assembly_concept.get('source_reference_ids') or not set(assembly_concept['source_reference_ids']) <= ref_ids:
+                    raise WorkflowError('全身assembly_conceptの由来資料IDが親計画と一致しません')
+                concept_path = (no_links(assembly_concept['file']) if Path(assembly_concept['file']).is_absolute()
+                                else self.store.path(project_id, assembly_concept['file']))
+                info = image_info(concept_path)
+                digest = sha(concept_path)
+                if assembly_concept.get('sha256') and assembly_concept['sha256'] != digest:
+                    raise WorkflowError('assembly_conceptの申告hashと実体が異なります')
+                if concept_path.is_relative_to(self.store.directory(project_id)):
+                    concept_relative = concept_path.relative_to(self.store.directory(project_id)).as_posix()
+                else:
+                    concept_relative = f'reference-packs/{pack_id}/assembly-concept{info["extension"]}'
+                    dest = self.store.path(project_id, concept_relative)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(concept_path, dest)
+                    if sha(dest) != digest:
+                        raise WorkflowError('assembly_conceptのコピー中に入力が変化しました')
+                assembly_concept.update(file=concept_relative, sha256=digest,
+                                        inferred=bool(assembly_concept.get('inferred', True)))
+                files.append({'file': concept_relative, 'sha256': digest})
             parent_id = manifest.get('parent_pack_id')
             if parent_id:
                 parent = find(doc.get('reference_packs', []), parent_id)
@@ -556,7 +640,8 @@ class V2Workbench(Workbench):
                     raise WorkflowError('親資料パックの制作計画が異なります')
             fixed = {'production_plan_id': production_id, 'production_hash': production['content_hash'],
                      'part_plan_id': production['fixed']['part_plan_id'],
-                     'parent_pack_id': parent_id, 'parts': normalized, 'files': files}
+                     'parent_pack_id': parent_id, 'parts': normalized,
+                     'assembly_concept': assembly_concept, 'files': files}
             item = record(project_id=project_id, **fixed, content_hash=fingerprint(fixed),
                           state='draft', approval=None)
             item['id'] = pack_id
@@ -566,8 +651,10 @@ class V2Workbench(Workbench):
 
     def verify_pack(self, doc, pack_id):
         pack = find(doc.get('reference_packs', []), pack_id)
-        fixed = {key: pack[key] for key in ('production_plan_id', 'production_hash', 'part_plan_id',
-                                             'parent_pack_id', 'parts', 'files')}
+        fixed_keys = ('production_plan_id', 'production_hash', 'part_plan_id', 'parent_pack_id', 'parts', 'files')
+        if 'assembly_concept' in pack:
+            fixed_keys = fixed_keys[:-1] + ('assembly_concept', 'files')
+        fixed = {key: pack[key] for key in fixed_keys}
         if pack['state'] != 'approved' or fingerprint(fixed) != pack['content_hash']:
             raise WorkflowError('承認済み・固定済みの資料パックが必要です')
         production = self.verify_production(doc, pack['production_plan_id'])
@@ -577,15 +664,17 @@ class V2Workbench(Workbench):
             _file(self.store, doc['id'], entry)
         manifest = read(self.store.path(doc['id'], f'reference-packs/{pack_id}/manifest.json'))
         if manifest.get('id') != pack_id or manifest.get('state') != 'approved' or any(
-                manifest.get(key) != pack.get(key) for key in ('content_hash', 'parts', 'files', 'approval')):
+                manifest.get(key) != pack.get(key) for key in ('content_hash', 'parts', 'assembly_concept', 'files', 'approval')):
             raise WorkflowError('承認済み資料パックのmanifestが一致しません')
         return pack
 
     def reference_pack_transition(self, project_id, pack_id, action, evidence=None):
         with self.store.update(project_id, 'reference_pack_' + action) as doc:
             pack = find(doc.get('reference_packs', []), pack_id)
-            fixed = {key: pack[key] for key in ('production_plan_id', 'production_hash', 'part_plan_id',
-                                                 'parent_pack_id', 'parts', 'files')}
+            fixed_keys = ('production_plan_id', 'production_hash', 'part_plan_id', 'parent_pack_id', 'parts', 'files')
+            if 'assembly_concept' in pack:
+                fixed_keys = fixed_keys[:-1] + ('assembly_concept', 'files')
+            fixed = {key: pack[key] for key in fixed_keys}
             if fingerprint(fixed) != pack['content_hash']:
                 raise WorkflowError('資料パックが変更されています')
             for entry in pack['files']:
@@ -686,3 +775,116 @@ class V2Workbench(Workbench):
             doc['plans'].append(item)
             write(folder / 'plan.json', item)
         return item
+
+    def quality_issue_add(self, project_id, production_id, issue):
+        if not isinstance(issue, dict):
+            raise WorkflowError('品質課題はJSONオブジェクトで指定してください')
+        with self.store.update(project_id, 'quality_issue_added') as doc:
+            production = self.verify_production(doc, production_id)
+            title = require_text(issue.get('title'))
+            category = issue.get('category')
+            if category not in ('silhouette', 'proportion', 'part_shape', 'part_transform',
+                                'interface', 'seam', 'material', 'reference_gap', 'detail', 'other'):
+                raise WorkflowError('課題categoryが不正です')
+            affected = issue.get('affected_part_ids', [])
+            if not isinstance(affected, list) or not affected or not set(affected) <= set(production['fixed']['scope']['part_ids']):
+                raise WorkflowError('affected_part_idsには親計画内の部品IDを1つ以上指定してください')
+            source_candidate_id = issue.get('candidate_id')
+            if source_candidate_id:
+                candidate = find(doc['candidates'], source_candidate_id)
+                if candidate.get('production_plan_id') != production_id or candidate['kind'] not in ('part', 'character'):
+                    raise WorkflowError('課題の候補は同じ親計画の部品または全身候補が必要です')
+            evidence = issue.get('evidence_reference_ids', [])
+            ref_ids = {r['id'] for r in production['fixed']['references']}
+            if not isinstance(evidence, list) or not set(evidence) <= ref_ids:
+                raise WorkflowError('evidence_reference_idsは親計画の参照資料IDで指定してください')
+            item = record(production_plan_id=production_id, title=title, category=category,
+                          priority=issue.get('priority', 3), mandatory=bool(issue.get('mandatory', False)),
+                          affected_part_ids=affected, affected_edges=issue.get('affected_edges', []),
+                          candidate_id=source_candidate_id, evidence_reference_ids=evidence,
+                          source_views=issue.get('source_views', []), repair=issue.get('repair'),
+                          state='open', evaluations=[])
+            if not isinstance(item['priority'], int) or not 1 <= item['priority'] <= 5:
+                raise WorkflowError('priorityは1〜5です')
+            doc.setdefault('quality_issues', []).append(item)
+        return item
+
+    def quality_issue_evaluate(self, project_id, issue_id, candidate_id, result, note):
+        if result not in ('resolved', 'reduced', 'unchanged', 'regressed', 'unclear'):
+            raise WorkflowError('評価はresolved/reduced/unchanged/regressed/unclearから選択してください')
+        with self.store.update(project_id, 'quality_issue_evaluated') as doc:
+            issue = find(doc.setdefault('quality_issues', []), issue_id)
+            candidate = find(doc['candidates'], candidate_id)
+            if candidate.get('production_plan_id') != issue['production_plan_id']:
+                raise WorkflowError('評価候補が課題の親計画と一致しません')
+            evaluation = record(candidate_id=candidate_id, result=result, note=require_text(note))
+            issue['evaluations'].append(evaluation)
+            issue['state'] = result if result in ('resolved', 'regressed') else 'open'
+        return evaluation
+
+    def completion_set(self, project_id, production_id, candidate_id, reason):
+        with self.store.update(project_id, 'completion_candidate_set') as doc:
+            production = self.verify_production(doc, production_id)
+            candidate = find(doc['candidates'], candidate_id)
+            if candidate.get('production_plan_id') != production_id or candidate['kind'] != 'character':
+                raise WorkflowError('完成候補には同じ親計画の全身candidate IDが必要です')
+            blocking = [i for i in doc.get('quality_issues', [])
+                        if i['production_plan_id'] == production_id and i.get('mandatory') and
+                        (not i.get('evaluations') or i['evaluations'][-1]['result'] != 'resolved'
+                         or i['evaluations'][-1]['candidate_id'] != candidate_id)]
+            if blocking:
+                raise WorkflowError('必須課題が未解決です: ' + ', '.join(i['id'] for i in blocking))
+            previous = [x for x in doc.get('completion_history', [])
+                        if x.get('production_plan_id') == production_id]
+            item = record(production_plan_id=production_id, candidate_id=candidate_id,
+                          reason=require_text(reason), supersedes=previous[-1]['id'] if previous else None)
+            doc.setdefault('completion_history', []).append(item)
+            production.update(completion_candidate_id=candidate_id, completion_record_id=item['id'])
+        return item
+
+    def candidate_edit_session_start(self, project_id, production_id, candidate_id):
+        with self.store.update(project_id, 'candidate_edit_session_started') as doc:
+            production = self.verify_production(doc, production_id)
+            candidate = find(doc['candidates'], candidate_id)
+            if candidate.get('production_plan_id') != production_id or candidate['kind'] not in ('part', 'character'):
+                raise WorkflowError('編集元は同じ親計画の部品または全身候補が必要です')
+            if candidate['status'] == 'rejected':
+                raise WorkflowError('却下済み候補から編集セッションを開始できません')
+            entry = next((f for f in candidate.get('files', []) if f['file'].lower().endswith('.blend')), None)
+            if not entry:
+                raise WorkflowError('候補に.blendファイルがありません')
+            source = self.verify_file(project_id, entry)
+            session_id = uid()
+            folder = self.store.path(project_id, f'edit-sessions/{session_id}')
+            folder.mkdir(parents=True, exist_ok=False)
+            working = folder / 'working.blend'
+            shutil.copyfile(source, working)
+            digest = sha(working)
+            if digest != entry['sha256'] or sha(source) != digest:
+                raise WorkflowError('編集用コピーのhashが元候補と一致しません')
+            item = record(production_plan_id=production_id, candidate_id=candidate_id,
+                          source_file=entry['file'], source_sha256=digest,
+                          working_file=f'edit-sessions/{session_id}/working.blend',
+                          state='open', result_candidate_id=None, closed_at=None)
+            item['id'] = session_id
+            doc.setdefault('edit_sessions', []).append(item)
+        return dict(item, working_path=str(working))
+
+    def candidate_edit_session_finish(self, project_id, session_id, edit, incoming):
+        doc = self.store.load(project_id)
+        session = find(doc.get('edit_sessions', []), session_id)
+        if session['state'] != 'open':
+            raise WorkflowError('編集セッションはopen状態ではありません')
+        edit = copy.deepcopy(edit)
+        if edit.get('session_id') and edit['session_id'] != session_id:
+            raise WorkflowError('edit manifestのsession_idが一致しません')
+        edit['session_id'] = session_id
+        external = no_links(incoming)
+        if not external.is_file() or external.suffix.lower() != '.blend':
+            raise WorkflowError('編集結果は実在する.blendファイルが必要です')
+        result = self.revision_run(project_id, session['candidate_id'],
+                                  session['production_plan_id'], edit, external)
+        with self.store.update(project_id, 'candidate_edit_session_finished') as updated:
+            current = find(updated.get('edit_sessions', []), session_id)
+            current.update(state='finished', result_candidate_id=result.get('id'), closed_at=now())
+        return result

@@ -10,6 +10,7 @@ from .recovery import resume
 from .workflow import Workbench, ROLES, VIEWS, STAGES
 from .runtime import execute, load_config
 from .v2 import V2Workbench
+from .v3 import V3Workbench
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -154,6 +155,8 @@ def parser():
     c = command(g, 'create', '新しい案件を作成', False)
     c.add_argument('--name', required=True)
     c.add_argument('--goal', '--prompt', dest='goal', required=True)
+    c.add_argument('--workflow-version', choices=[2, 3], type=int, default=2,
+                   help='新規案件の制作ハーネス版（既定2、v3運用は3）')
     command(g, 'list', '案件一覧', False).add_argument('--terminal', action='store_true')
     command(g, 'show', '案件の全記録を表示')
     command(g, 'resume', '文脈・入力整合性・保留計画・ロックを読み取り専用で確認')
@@ -225,6 +228,8 @@ def parser():
             c.add_argument('--reason', required=True)
 
     g = group('reference-pack', '部品別の造形用資料パック')
+    c = command(g, 'brief', 'Codexの画像生成に渡す部品別資料準備の指示', project=False)
+    c.add_argument('production_plan_id')
     c = command(g, 'create', '資料パックを登録')
     c.add_argument('--production', required=True)
     c.add_argument('--file', required=True)
@@ -234,6 +239,45 @@ def parser():
         c.add_argument('pack_id')
         if action == 'approve':
             c.add_argument('--evidence')
+
+    g = group('quality-issue', '全体比較から抽出した課題と部品修正の追跡')
+    c = command(g, 'add', 'レビュー課題を記録', project=False)
+    c.add_argument('--production', required=True)
+    c.add_argument('--file', required=True, help='title/category/affected_part_ids等を含むJSON')
+    c = command(g, 'list', '課題一覧')
+    c.add_argument('--production')
+    c = command(g, 'evaluate', '候補上での課題解消度を記録', project=False)
+    c.add_argument('issue_id')
+    c.add_argument('--candidate', required=True)
+    c.add_argument('--comparison', required=True)
+    c.add_argument('--result', choices=['resolved', 'reduced', 'unchanged', 'regressed', 'unclear'], required=True)
+    c.add_argument('--reason', required=True)
+    c = command(g, 'next', '候補ごとの未解決課題と修正指示', project=False)
+    c.add_argument('--production', required=True)
+    c.add_argument('--candidate', required=True)
+
+    g = group('completion', '制作完了候補を1件指定。正式採用とは別の記録')
+    c = command(g, 'set', '完成版候補を指定', project=False)
+    c.add_argument('--production', required=True)
+    c.add_argument('--candidate', required=True)
+    c.add_argument('--reason', required=True)
+    c = command(g, 'list', '完成候補の変更履歴', project=False)
+    c.add_argument('--production', required=True)
+
+    c = command(g, 'show', '現在の完成候補と未完了理由', project=False)
+    c.add_argument('--production', required=True)
+    g = group('comparison', '同条件の全身・部品レンダーと一次資料の比較')
+    c = command(g, 'brief', '候補と参照資料から初回比較条件を作る', project=False)
+    c.add_argument('candidate_id')
+    c = command(g, 'create', 'Blenderで比較画像を作る', project=False)
+    c.add_argument('candidate_id')
+    c.add_argument('--file', required=True)
+    c = command(g, 'review', '全体・部品・保持・全要件のレビュー', project=False)
+    c.add_argument('comparison_id')
+    c.add_argument('--file', required=True)
+    c = command(g, 'show', '比較条件・画像・レビューを表示', project=False)
+    c.add_argument('comparison_id')
+    command(g, 'list', '比較記録を一覧')
 
     for name, kind in [('asset', 'part'), ('image', 'prepared_image')]:
         g = group(name, '既存の部品OBJ／生成用画像の登録')
@@ -320,6 +364,23 @@ def parser():
     c.add_argument('--source', required=True)
     c.add_argument('--production', required=True)
     c.add_argument('--file', required=True)
+    c = command(g, 'edit-start', '候補IDからBlender MCP編集用コピーを作成', project=False)
+    c.add_argument('candidate_id')
+    c.add_argument('--production', required=True)
+    c.add_argument('--issue', action='append', default=[])
+    c = command(g, 'edit-finish', '編集結果を検証し親候補の派生候補として登録', project=False)
+    c.add_argument('session_id')
+    c.add_argument('--result', required=True, help='Blender MCPで保存した編集後.blend')
+    c.add_argument('--file', required=True, help='mode/target_part_ids/changed_by/reason等のedit manifest')
+    c = command(g, 'edit-bind', 'MCPが観測したシーン・候補ID・hashを照合', project=False)
+    c.add_argument('session_id')
+    c = command(g, 'edit-show', '編集セッションの状態とエラーを表示', project=False)
+    c.add_argument('session_id')
+    c = command(g, 'edit-recover', '登録済み派生候補から中断後のセッションを復元', project=False)
+    c.add_argument('session_id')
+    c = command(g, 'edit-abandon', '作業ファイルを保持してセッションを終了', project=False)
+    c.add_argument('session_id')
+    c.add_argument('--reason', required=True)
     c = command(g, 'inspect', '元候補を変更せず追加の4方向点検を作成')
     c.add_argument('candidate_id')
     c.add_argument('--production', required=True)
@@ -342,7 +403,7 @@ def parser():
     c.add_argument('plan_id')
     # Resource IDs own their project. Keep the old two-ID form as an optional prefix.
     resource_fields = {'reference_id', 'requirement_id', 'part_plan_id', 'candidate_id', 'plan_id',
-                       'production_plan_id', 'pack_id'}
+                       'production_plan_id', 'pack_id', 'issue_id', 'session_id'}
     for group_action in top.choices.values():
         for sub in group_action._actions:
             if isinstance(sub, argparse._SubParsersAction):
@@ -360,7 +421,7 @@ def parser():
 def dispatch(args):
     store = Store(args.root)
     config = load_config(args.config)
-    wb = V2Workbench(store, config)
+    wb = V3Workbench(store, config)
     g, a = args.group, getattr(args, 'action', None)
     pid = getattr(args, 'project_id', None)
     if g == 'candidate' and a == 'compare':
@@ -369,6 +430,14 @@ def dispatch(args):
             pid, args.candidate_ids = ids[0], ids[1:]
         elif ids:
             pid = owner(store, 'candidates', ids[0])
+    if g in ('quality-issue', 'completion') and getattr(args, 'production', None):
+        pid = owner(store, 'production_plans', args.production)
+    if g == 'quality-issue' and a == 'evaluate':
+        pid = owner(store, 'quality_issues', args.issue_id)
+    if g == 'candidate' and a in ('edit-finish', 'edit-bind', 'edit-show', 'edit-recover', 'edit-abandon'):
+        pid = owner(store, 'edit_sessions', args.session_id)
+    if g == 'comparison' and getattr(args, 'comparison_id', None):
+        pid = owner(store, 'comparisons', args.comparison_id)
     if pid is None:
         for field, collection in (('plan_id', 'plans'), ('candidate_id', 'candidates'),
                                   ('reference_id', 'references'), ('requirement_id', 'requirements'),
@@ -389,7 +458,7 @@ def dispatch(args):
         return wb.status(pid) if pid else [wb.status(d['id']) for d in store.list()]
     if g == 'project':
         if a == 'create':
-            return store.create(args.name, args.goal)
+            return store.create(args.name, args.goal, args.workflow_version)
         if a == 'list':
             return [{'id': d['id'], 'name': d['name'], 'state': d['state']} for d in store.list()]
         if a == 'show':
@@ -455,6 +524,8 @@ def dispatch(args):
                     if a == 'approve' else args.reason if a == 'cancel' else None)
         return wb.production_transition(pid, args.production_plan_id, a, evidence)
     if g == 'reference-pack':
+        if a == 'brief':
+            return wb.reference_brief(pid, args.production_plan_id)
         if a == 'create':
             return wb.reference_pack_create(pid, args.production, read(args.file))
         if a == 'list':
@@ -464,6 +535,31 @@ def dispatch(args):
             return item
         evidence = confirmation('全部品の造形用資料パックを承認', item, args.evidence) if a == 'approve' else None
         return wb.reference_pack_transition(pid, args.pack_id, a, evidence)
+    if g == 'quality-issue':
+        if a == 'next':
+            return wb.repair_queue(pid, args.production, args.candidate)
+        if a == 'add':
+            return wb.quality_issue_add(pid, args.production, read(args.file))
+        if a == 'evaluate':
+            return wb.quality_issue_evaluate(pid, args.issue_id, args.candidate, args.result, args.reason, args.comparison)
+        issues = store.load(pid).get('quality_issues', [])
+        return [i for i in issues if not args.production or i['production_plan_id'] == args.production]
+    if g == 'completion':
+        if a == 'show':
+            return wb.completion_status(pid, args.production)
+        if a == 'set':
+            return wb.completion_set(pid, args.production, args.candidate, args.reason)
+        return [x for x in store.load(pid).get('completion_history', [])
+                if x['production_plan_id'] == args.production]
+    if g == 'comparison':
+        if a == 'brief':
+            return wb.comparison_brief(pid, args.candidate_id)
+        if a == 'create':
+            return wb.comparison_run(pid, args.candidate_id, read(args.file))
+        if a == 'review':
+            return wb.comparison_review(pid, args.comparison_id, read(args.file))
+        comparisons = store.load(pid).get('comparisons', [])
+        return find(comparisons, args.comparison_id) if a == 'show' else comparisons
     if g in ('asset', 'image'):
         if g == 'image' and a == 'approve':
             image = find(store.load(pid)['candidates'], args.candidate_id)
@@ -518,6 +614,18 @@ def dispatch(args):
         return wb.transition(pid, args.plan_id, a, expected, evidence)
     if g == 'candidate':
         candidates = store.load(pid)['candidates']
+        if a == 'edit-bind':
+            return wb.candidate_edit_session_bind(pid, args.session_id)
+        if a == 'edit-show':
+            return find(store.load(pid).get('edit_sessions', []), args.session_id)
+        if a == 'edit-recover':
+            return wb.candidate_edit_session_recover(pid, args.session_id)
+        if a == 'edit-abandon':
+            return wb.candidate_edit_session_abandon(pid, args.session_id, args.reason)
+        if a == 'edit-start':
+            return wb.candidate_edit_session_start(pid, args.production, args.candidate_id, args.issue)
+        if a == 'edit-finish':
+            return wb.candidate_edit_session_finish(pid, args.session_id, read(args.file), args.result)
         if a == 'import-blend':
             return wb.revision_run(pid, args.source, args.production, read(args.file), args.blend_path)
         if a == 'inspect':

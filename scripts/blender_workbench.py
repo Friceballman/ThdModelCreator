@@ -117,6 +117,9 @@ def main():
     if set(mapping) != {p['part_id'] for p in job['composition']}:
         raise RuntimeError('構成とBlender内の部品が一致しません')
     if job['stage'] == 'assembly':
+        # Newly linked library objects need a dependency graph update before
+        # matrix_world contains their saved object transforms.
+        bpy.context.view_layer.update()
         for part in job['composition']:
             transform = (Matrix.Translation(Vector(part['location'])) @
                          Euler([math.radians(x) for x in part['rotation_degrees']]).to_matrix().to_4x4() @
@@ -185,8 +188,8 @@ def main():
     low = Vector([min(p[i] for p in corners) for i in range(3)])
     high = Vector([max(p[i] for p in corners) for i in range(3)])
     center, size = (low + high) * 0.5, max(high - low)
-    if job['source'] and 'preview_center' in scene and 'preview_size' in scene:
-        center, size = Vector(scene['preview_center']), scene['preview_size']
+    # Recompute framing from the current objects.  Assembly and surface runs can
+    # add parts outside a source candidate's stored single-part preview bounds.
     scene['preview_center'] = list(center)
     scene['preview_size'] = size
     if job['stage'] == 'surface':
@@ -198,6 +201,8 @@ def main():
         scene.render.engine = 'BLENDER_WORKBENCH'
         scene.display.shading.color_type = 'MATERIAL'
         scene.display.shading.light = 'STUDIO'
+        scene.display.shading.background_type = 'VIEWPORT'
+        scene.display.shading.background_color = (0.82, 0.82, 0.82)
         scene.display.shading.show_cavity = True
         scene.render.resolution_x = scene.render.resolution_y = 384
         scene.render.resolution_percentage = 100
