@@ -20,5 +20,6 @@ __pycache__/
 # Local production cases and experiment results
 /projects/
 /.local/v3-smoke/
+/.local/v35-smoke/
 /experiments/*
 !/experiments/config.example.json

@@ -11,6 +11,7 @@ from .workflow import Workbench, ROLES, VIEWS, STAGES
 from .runtime import execute, load_config
 from .v2 import V2Workbench
 from .v3 import V3Workbench
+from .rigging import RiggingLab
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -203,6 +204,15 @@ def parser():
             c.add_argument('--part')
         if action == 'list':
             c.add_argument('--terminal', action='store_true')
+
+    g = group('animation', 'ver3.5検証用のアニメーション要件入力・確認。モデルは変更しない')
+    c = command(g, 'input', '静止候補に対する動作要件を新しい版として保存', project=False)
+    c.add_argument('candidate_id')
+    inputs = c.add_mutually_exclusive_group(required=True)
+    inputs.add_argument('--text', help='必要な動作や保持条件の文章。実行承認とは別')
+    inputs.add_argument('--file', help='textとdetailsを持つ構造化要件JSON')
+    c = command(g, 'show', '同じ静止候補に対する入力履歴を確認', project=False)
+    c.add_argument('candidate_id')
 
     g = group('part', '部品構成の提案と確認')
     c = command(g, 'plan', '部品構成JSONを新しい版として登録')
@@ -502,6 +512,14 @@ def dispatch(args):
             return wb.requirement_update(pid, args.requirement_id, args.reason,
                                          getattr(args, 'text', None), a == 'retire')
         return store.load(pid)['requirements']
+    if g == 'animation':
+        rigging = RiggingLab(store, config)
+        if a == 'show':
+            return rigging.requirements_show(pid, args.candidate_id)
+        value = read(args.file) if args.file else {'text': args.text}
+        if not isinstance(value, dict) or set(value) - {'text', 'details'}:
+            raise WorkflowError('要件JSONはtextと任意のdetailsを指定します')
+        return rigging.requirements_input(pid, args.candidate_id, value['text'], value.get('details'))
     if g == 'part':
         if a == 'plan':
             if bool(args.file) == bool(args.name):

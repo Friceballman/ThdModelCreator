@@ -112,6 +112,11 @@ class Store:
                            'edit_sessions', 'completion_history', 'comparisons'):
             if not isinstance(doc.get(collection, []), list):
                 raise WorkflowError(f'案件データが破損しています: {collection}')
+        if 'rigging_lab' in doc:
+            data = doc['rigging_lab']
+            if (not isinstance(data, dict) or data.get('version') != 1 or
+                    any(not isinstance(data.get(k), list) for k in ('requirements', 'experiments'))):
+                raise WorkflowError('未知または破損したrigging_labです。上書きせず停止します')
         return doc
 
     def save(self, doc):
