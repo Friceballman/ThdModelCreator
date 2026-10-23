@@ -4,6 +4,15 @@
 
 まず静止候補に対し、必要な動作と守るべき外観を文章で入力する。指定済み完成品の候補IDは `47dab7b4-5ba2-4702-be3f-ec2ffe6ea04c`。以下の文章は書式例であり、この案件の確定要件ではない。
 
+指定モデルとの対応は次のとおり。`mwb animation` はフォルダ名ではなく、案件台帳 `project.json` の候補IDを受け取る。
+
+- 案件ID：`e2fbd0be-7077-4411-aab9-62fa8ce06c80`。
+- 利用者指定ファイル：`exports/fd13ce2d-48f8-4a61-b359-9a136387f79b/outputs/model.blend`。フォルダ名 `fd13ce2d-...` は元の制作runのIDで、同フォルダの `plan.json` も `runs/fd13ce2d-...` を指す。
+- 案件台帳の対応候補ID：`47dab7b4-5ba2-4702-be3f-ec2ffe6ea04c`。この候補が登録するファイルは `runs/fd13ce2d-48f8-4a61-b359-9a136387f79b/outputs/model.blend`。
+- 上記二つの `.blend` のSHA-256は、ともに `f69f023673167b00b333bbfe132632f54ad4ad4d0fcf19e8f3dcee6bb7a3558f`。ファイル内容が同一であることを確認した。目視照合用の正面画像は指定フォルダ内の `outputs/previews/front.png`。
+
+案件台帳の正式な `exports` 記録は別に存在し、IDは `f5935021-b6d5-49e8-a2e6-1610ac726af1`、保存先は `exports/f57fd1a8-6e61-4b7f-a637-d1ceb5a85abf`、候補IDは `85a225d1-7c6d-4cf3-a7aa-bd7dd5bfa24b`。今回の `animation` コマンドは、利用者指定の `fd13ce2d-.../outputs/model.blend` と一致する候補 `47dab7b4-...` を対象とする。
+
 ```powershell
 mwb animation input 47dab7b4-5ba2-4702-be3f-ec2ffe6ea04c --text "必要な動作、動かす箇所、守る外観、UEでの用途を記載"
 mwb animation show 47dab7b4-5ba2-4702-be3f-ec2ffe6ea04c
