@@ -34,4 +34,38 @@ mwb animation show 47dab7b4-5ba2-4702-be3f-ec2ffe6ea04c
 & 'C:\AI_test\TripoSR\.venv\Scripts\python.exe' -B scripts/smoke_rigging.py --real-project e2fbd0be-7077-4411-aab9-62fa8ce06c80 --candidate 47dab7b4-5ba2-4702-be3f-ec2ffe6ea04c
 ```
 
-結果はGit管理外の `.local/v35-smoke/<run-id>/summary.json` に保存する。元候補、元資料、静止候補の採用状態は変更しない。今回未実装の外部モデル取込み、FBX・UE確認、連続動作、局所形状修正は [仕様書](spec-v3.5.md) に残した次段階の対象とする。
+結果はGit管理外の `.local/v35-smoke/<run-id>/summary.json` に保存する。元候補、元資料、静止候補の採用状態は変更しない。外部モデル取込みや汎用の局所修正・クリップ評価・FBX出力、UE結果取込みは共有APIには未実装。今回の指定案件に対する修正・5クリップ・FBX検証は次節の案件専用手順で実施した。
+
+## 今回の完成モデルと5動作の確認
+
+以下のパスは、すべて案件 `projects/e2fbd0be-7077-4411-aab9-62fa8ce06c80/` からの相対パス。元の静止モデルは上書きしていない。
+
+- 確認用ページ：`planning/rigging-v35-20261023/review-50ec6d7c-c0c5-40ce-bc28-88f9b78551fb/index.html`。ブラウザーで開くと、5種類のGIFと四方向画像・全プレビューフレームを確認できる。
+- 編集用モデル：`runs/0d62fec2-f5a5-41cb-b2b3-b68d0db15630/outputs/model.blend`。
+- FBX一式：同じ `outputs/fbx/`。
+- 数値と検証範囲：[検証記録](rigging-validation-2026-10-23.md)。ファイルとID・hashの対応は確認ページと同じフォルダの `artifact-manifest.json`。
+
+Blender 5.2.0 LTSで編集用モデルを開くと、待機Actionと再生範囲が選択されている。スペースキーで再生・停止する。別の動作を見る場合は、下部のAction Editorで次のActionを選び、終了フレームも表に合わせる。再生速度は30fps。GIFは15fpsで書き出している。
+
+| Action | 範囲 | 内容 |
+| --- | --- | --- |
+| `00_Source_Pose` | 1 | 元の非対称な静止ポーズへ戻す |
+| `01_Idle` | 1–61 | 待機、頭部・眼球の小さな動き |
+| `02_Walk` | 1–61 | その場での歩行2周期 |
+| `03_Run` | 1–49 | その場での走行2周期 |
+| `04_Hit_Recoil` | 1–45 | 被弾ののけ反りと復帰 |
+| `05_Knockback` | 1–61 | 後方移動・浮き・着地 |
+
+元モデルの見た目を照合するときは `00_Source_Pose` の1フレーム目を使う。手動で骨を動かす場合は `MWB_RIG` を選択してPose Modeへ切り替える。全21骨のFKリグであり、手足をドラッグして曲げるIKコントローラーや指の個別操作、衣服物理は追加していない。確認用Actionを変更する前に別名で保存する。
+
+吹き飛びはrootが後方へ約0.9m移動するため、GIFの繰り返し時に開始位置へ戻る。被弾と吹き飛びのGIF末尾には確認用の停止時間がある。歩行・走行はその場再生であり、ゲーム内の移動速度やリターゲットの適合を確認したものではない。
+
+## UE向けファイルを確認する手順
+
+まず `SK_ClockCharacter.fbx` をSkeletal Meshとして読み込み、そのSkeletonを基準にする。各 `A_*.fbx` は同じスキン済みメッシュと個別のベイク済み動作を含むため、アニメーションを読み込むときは先ほどのSkeletonを指定し、重複するメッシュの読込みを無効にする。実際の項目名と取込み方式は対象UE版で確認する。
+
+出力はBlenderのメートル単位、-Y前方・Z上方、21変形骨、余分なleaf boneなし、毎フレームのベイク。設定と再読込結果はモデルと同じ `outputs/checks.json` にある。Blenderの再読込では時間原点が1フレームずれており、相対時間を対応させて比較した。UEでのスケール・向き・開始時刻・root移動・材質・全クリップの再生は未検証で、取込み後に確認する。FBX再読込成功をUEでの動作確認済みとは扱わない。
+
+## 検証担当者が反復を続ける場合
+
+案件専用の実行・修正・監査・FBX・プレビューのレシピは [experiments/rigging-v35-case/README.md](../experiments/rigging-v35-case/README.md) を参照する。各runの入力・スクリプト・パラメータ・hashを保持しており、既存runを再実行せず新しいstageへ派生させる。今回のモデルに依存する検証設備であり、他の静止モデルを自動で同品質に変換できる機能ではない。正式採用とUE結果の登録は、この確認用成果物の作成とは別である。

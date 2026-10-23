@@ -23,3 +23,4 @@ __pycache__/
 /.local/v35-smoke/
 /experiments/*
 !/experiments/config.example.json
+!/experiments/rigging-v35-case/

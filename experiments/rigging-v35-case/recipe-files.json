@@ -1,0 +1,53 @@
+{
+  "hash_definition": "SHA-256 after CRLF-to-LF normalization",
+  "files": [
+    {
+      "file": "body_clearance.py",
+      "sha256_lf": "9ce329bf726900b7557dcb426d2921ab1d2187d747b2f349938d07361aa50b0e"
+    },
+    {
+      "file": "body_retopology.py",
+      "sha256_lf": "e51712a36a693ec7f42d621d8ae58cd9d50f93cd312cc22928227cdec2a1cda9"
+    },
+    {
+      "file": "build_confirmation_actions.py",
+      "sha256_lf": "821919c13e7082b1ae6c40218f1dea5c3067153bfd846380e3fe07edaccd6696"
+    },
+    {
+      "file": "classify_raster_pixels.py",
+      "sha256_lf": "1577ff28a4f6c807b30969cdf96e20afdccf3e5923c5e67b920b3f99658951ed"
+    },
+    {
+      "file": "export_fbx.py",
+      "sha256_lf": "a606da0069d3a1edca31d73f72316cc1041598c624fe833b2de6b59219b29f37"
+    },
+    {
+      "file": "make_review.py",
+      "sha256_lf": "147741c1b8edd99c15a2d70c7a4f763fd6209d2a85390ec741f75becf9d875f8"
+    },
+    {
+      "file": "raster_audit.py",
+      "sha256_lf": "a7ca358561c208e66c4f5536ebb7315084b86504c2e1a3beeb039e3029b12b1d"
+    },
+    {
+      "file": "render_previews.py",
+      "sha256_lf": "da76574deb3c7363a4afa0b8b3a388bd71c884f38d6909090a86b93cd962f5f3"
+    },
+    {
+      "file": "repair_body_weights.py",
+      "sha256_lf": "608fba47aa0bd99d93d2cbf18efe405f2e28a323ed84a632f597702c21830b1e"
+    },
+    {
+      "file": "repair_internal_seams.py",
+      "sha256_lf": "deb3ac7c31e159bc59687a00a2249ebd4ff4d90d9a4d566416bfe3b0132e4907"
+    },
+    {
+      "file": "run_case.py",
+      "sha256_lf": "a1b9013de6364d98d68ef4d2b898129d7a6b5d4a09b0eaa5467bbd83526dc92b"
+    },
+    {
+      "file": "verify_delivery.py",
+      "sha256_lf": "9b13865611632062a4a86596d59ffe82cf9aa0fdd8084bcca04464f052eab723"
+    }
+  ]
+}
